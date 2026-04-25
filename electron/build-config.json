@@ -1,0 +1,36 @@
+{
+  "build": {
+    "appId": "com.jarvis.voice-automation",
+    "productName": "JARVIS",
+    "artifactName": "JARVIS-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "electron/**/*",
+      "backend/dist/**/*",
+      "frontend/dist/**/*",
+      "node_modules/**/*",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme,LICENSE,license,LIC}"
+    ],
+    "directories": {
+      "buildResources": "electron/assets"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "electron/assets/icon.png",
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "electron/assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

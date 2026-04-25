@@ -1,0 +1,70 @@
+{
+  "name": "jarvis-voice-automation",
+  "version": "1.0.0",
+  "description": "Unified JARVIS workspace for voice-driven Copilot automation",
+  "scripts": {
+    "install:all": "npm --prefix frontend install && npm --prefix backend install",
+    "dev": "concurrently -k \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend run dev",
+    "build": "npm --prefix frontend run build && npm --prefix backend run build",
+    "start": "npm --prefix backend run start",
+    "electron": "electron electron/main.js",
+    "electron:dev": "npm run build && npm run electron",
+    "electron:build": "npm run build && electron-builder build --publish never",
+    "electron:build:mac": "npm run build && electron-builder build --mac --publish never",
+    "electron:build:win": "npm run build && electron-builder build --win --publish never",
+    "electron:pack": "electron-builder --dir",
+    "electron:dist": "npm run build && electron-builder"
+  },
+  "keywords": [
+    "jarvis",
+    "voice",
+    "copilot",
+    "automation",
+    "ai"
+  ],
+  "author": "",
+  "license": "ISC",
+  "main": "electron/main.js",
+  "homepage": "./",
+  "build": {
+    "appId": "com.jarvis.voice-automation",
+    "productName": "JARVIS",
+    "artifactName": "JARVIS-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "electron/**/*",
+      "backend/dist/**/*",
+      "frontend/dist/**/*",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "buildResources": "electron/assets"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "electron/assets/icon.png",
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "electron/assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "@playwright/mcp": "^0.0.70",
+    "concurrently": "^9.1.2",
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1"
+  }
+}

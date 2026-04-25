@@ -1,0 +1,159 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    @apply bg-black;
+  }
+
+  body {
+    @apply min-h-screen text-white overflow-x-hidden;
+    background:
+      radial-gradient(circle at -20% 50%, rgba(0, 255, 255, 0.15), transparent 40%),
+      radial-gradient(circle at 120% 30%, rgba(191, 0, 255, 0.18), transparent 35%),
+      radial-gradient(circle at 50% 100%, rgba(255, 0, 127, 0.1), transparent 45%),
+      linear-gradient(135deg, #0a0a0a 0%, #1a0a2e 35%, #0f0520 70%, #000000 100%);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 255, 255, 0.5) rgba(10, 10, 10, 0.8);
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: linear-gradient(to bottom, rgba(0, 255, 255, 0.6), rgba(191, 0, 255, 0.4));
+    border-radius: 999px;
+    box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+  }
+
+  *::-webkit-scrollbar-track {
+    background: rgba(10, 10, 10, 0.6);
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-white/5 backdrop-blur-2xl border border-white/10;
+    @apply rounded-2xl shadow-2xl;
+    position: relative;
+    background-clip: padding-box;
+    box-shadow: 
+      0 8px 32px rgba(0, 255, 255, 0.1),
+      inset 0 1px 1px rgba(255, 255, 255, 0.2),
+      inset 0 -1px 1px rgba(0, 0, 0, 0.5);
+    border-image: linear-gradient(135deg, rgba(0, 255, 255, 0.3), rgba(191, 0, 255, 0.2)) 1;
+  }
+
+  .glass::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(135deg, rgba(0, 255, 255, 0.05), rgba(191, 0, 255, 0.03));
+    pointer-events: none;
+    border-radius: 2xl;
+  }
+
+  .glass-panel {
+    @apply glass border shadow-2xl;
+    background-color: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.1);
+    box-shadow: 
+      0 12px 48px rgba(0, 255, 255, 0.15),
+      inset 0 1px 2px rgba(255, 255, 255, 0.15);
+  }
+
+  .control-tile {
+    @apply rounded-xl border px-4 py-3 transition-all duration-300 ease-out hover:shadow-lg;
+    border-color: rgba(255, 255, 255, 0.1);
+    background-color: rgba(255, 255, 255, 0.05);
+  }
+
+  .control-tile:hover {
+    border-color: rgba(0, 255, 255, 0.6);
+    background-color: rgba(0, 255, 255, 0.1);
+    box-shadow: 0 8px 16px rgba(0, 255, 255, 0.2);
+  }
+
+  .control-pill {
+    @apply inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.2em] transition-all duration-200;
+    border-color: rgba(0, 255, 255, 0.4);
+    background-color: rgba(0, 255, 255, 0.08);
+    color: rgba(0, 255, 255, 0.9);
+    box-shadow: 0 0 12px rgba(0, 255, 255, 0.2);
+  }
+
+  .control-pill:hover {
+    border-color: rgba(0, 255, 255, 0.7);
+    background-color: rgba(0, 255, 255, 0.15);
+  }
+
+  .section-label {
+    @apply text-[11px] uppercase tracking-[0.24em];
+    color: rgba(255, 255, 255, 0.5);
+    text-shadow: 0 0 8px rgba(0, 255, 255, 0.1);
+  }
+
+  .soft-grid {
+    background-image:
+      linear-gradient(rgba(0, 255, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 255, 255, 0.03) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  
+  .glass-hover {
+    @apply transition-all duration-300 ease-out hover:bg-white/12 hover:border-neon-cyan/40;
+    @apply hover:shadow-2xl hover:shadow-neon-cyan/30;
+  }
+  
+  .neon-text {
+    @apply text-transparent bg-clip-text bg-gradient-to-r from-neon-cyan via-neon-purple to-neon-pink;
+    animation: gradient-shift 4s ease infinite;
+    background-size: 200% auto;
+  }
+
+  @keyframes gradient-shift {
+    0%, 100% { background-position: 0% center; }
+    50% { background-position: 100% center; }
+  }
+  
+  .neon-border {
+    @apply border-2 border-neon-cyan;
+    box-shadow: 
+      0 0 20px rgba(0, 255, 255, 0.6),
+      inset 0 0 20px rgba(0, 255, 255, 0.1),
+      0 0 40px rgba(0, 255, 255, 0.3);
+  }
+
+  .glow-accent {
+    position: relative;
+  }
+
+  .glow-accent::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    background: linear-gradient(135deg, rgba(0, 255, 255, 0.4), rgba(191, 0, 255, 0.2));
+    border-radius: inherit;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  .glow-accent:hover::after {
+    opacity: 1;
+  }
+}
