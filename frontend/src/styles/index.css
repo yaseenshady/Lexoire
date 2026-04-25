@@ -156,4 +156,185 @@
   .glow-accent:hover::after {
     opacity: 1;
   }
+
+  /* Jarvis Sphere Glow Effects */
+  .sphere-glow-cyan {
+    box-shadow: 
+      0 0 20px rgba(0, 255, 255, 0.4),
+      0 0 40px rgba(0, 255, 255, 0.2),
+      0 0 60px rgba(0, 255, 255, 0.1),
+      inset 0 0 20px rgba(0, 255, 255, 0.1);
+  }
+
+  .sphere-glow-blue {
+    box-shadow: 
+      0 0 20px rgba(0, 187, 255, 0.4),
+      0 0 40px rgba(0, 187, 255, 0.2),
+      0 0 60px rgba(0, 187, 255, 0.1),
+      inset 0 0 20px rgba(0, 187, 255, 0.1);
+  }
+
+  .sphere-glow-violet {
+    box-shadow: 
+      0 0 20px rgba(191, 0, 255, 0.4),
+      0 0 40px rgba(191, 0, 255, 0.2),
+      0 0 60px rgba(191, 0, 255, 0.1),
+      inset 0 0 20px rgba(191, 0, 255, 0.1);
+  }
+
+  .sphere-glow-amber {
+    box-shadow: 
+      0 0 20px rgba(255, 170, 0, 0.4),
+      0 0 40px rgba(255, 170, 0, 0.2),
+      0 0 60px rgba(255, 170, 0, 0.1),
+      inset 0 0 20px rgba(255, 170, 0, 0.1);
+  }
+
+  /* Shimmer animation for scanlines */
+  @keyframes scanline-shimmer {
+    0% {
+      opacity: 0;
+      transform: translateX(-100%);
+    }
+    50% {
+      opacity: 0.5;
+    }
+    100% {
+      opacity: 0;
+      transform: translateX(100%);
+    }
+  }
+
+  .scanline-shimmer {
+    animation: scanline-shimmer 3s ease-in-out infinite;
+  }
+
+  /* Holographic effect */
+  @keyframes holographic-pulse {
+    0%, 100% {
+      opacity: 0.8;
+      filter: hue-rotate(0deg);
+    }
+    50% {
+      opacity: 1;
+      filter: hue-rotate(10deg);
+    }
+  }
+
+  .holographic {
+    animation: holographic-pulse 2.5s ease-in-out infinite;
+    background: linear-gradient(
+      45deg,
+      rgba(0, 255, 255, 0.1),
+      rgba(191, 0, 255, 0.1),
+      rgba(255, 0, 127, 0.1)
+    );
+    background-size: 200% 200%;
+  }
+
+  /* Core pulse effect */
+  @keyframes core-pulse {
+    0%, 100% {
+      box-shadow: 
+        0 0 20px rgba(0, 255, 255, 0.4),
+        0 0 40px rgba(0, 255, 255, 0.2);
+    }
+    50% {
+      box-shadow: 
+        0 0 30px rgba(0, 255, 255, 0.6),
+        0 0 60px rgba(0, 255, 255, 0.3);
+    }
+  }
+
+  .core-pulse {
+    animation: core-pulse 2s ease-in-out infinite;
+  }
+
+  /* Floating particles */
+  @keyframes float-particle {
+    0%, 100% {
+      transform: translateY(0px);
+      opacity: 0.3;
+    }
+    50% {
+      transform: translateY(-10px);
+      opacity: 0.8;
+    }
+  }
+
+  .float-particle {
+    animation: float-particle 2.5s ease-in-out infinite;
+  }
+
+  /* Orbital ring rotation */
+  @keyframes orbital-rotation {
+    from {
+      transform: rotateZ(0deg);
+    }
+    to {
+      transform: rotateZ(360deg);
+    }
+  }
+
+  .orbital-ring {
+    animation: orbital-rotation linear infinite;
+  }
+
+  .orbital-ring-slow {
+    animation-duration: 20s;
+  }
+
+  .orbital-ring-medium {
+    animation-duration: 15s;
+  }
+
+  .orbital-ring-fast {
+    animation-duration: 10s;
+  }
+
+  /* Data packet travel */
+  @keyframes data-packet-travel {
+    0% {
+      offset-distance: 0%;
+      opacity: 0;
+    }
+    10% {
+      opacity: 1;
+    }
+    90% {
+      opacity: 1;
+    }
+    100% {
+      offset-distance: 100%;
+      opacity: 0;
+    }
+  }
+
+  .data-packet {
+    animation: data-packet-travel 3s linear infinite;
+  }
+
+  /* HUD glow text */
+  .hud-text {
+    text-shadow: 
+      0 0 10px rgba(0, 255, 255, 0.5),
+      0 0 20px rgba(0, 255, 255, 0.3);
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.1em;
+  }
+
+  /* Glass blur enhancement for dark mode */
+  .glass-dark {
+    @apply backdrop-blur-xl bg-black/30 border border-white/10;
+    background-clip: padding-box;
+  }
+
+  /* Radial gradient background for hero */
+  .hero-gradient {
+    background: 
+      radial-gradient(circle at 20% 50%, rgba(0, 255, 255, 0.2) 0%, transparent 50%),
+      radial-gradient(circle at 80% 30%, rgba(191, 0, 255, 0.15) 0%, transparent 50%),
+      radial-gradient(circle at 50% 100%, rgba(255, 0, 127, 0.1) 0%, transparent 60%),
+      linear-gradient(135deg, #0a0a0a 0%, #1a0a2e 50%, #000000 100%);
+  }
 }
