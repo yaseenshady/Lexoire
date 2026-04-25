@@ -10,10 +10,14 @@ import { MemoryPanel } from './components/MemoryPanel';
 import { ProjectPlanViewer } from './components/ProjectPlanViewer';
 import { NotificationManager } from './components/Notification';
 import { ParticleBackground } from './components/ParticleBackground';
+import { MultiSessionDashboard } from './components/MultiSessionDashboard';
+import { SessionTabs } from './components/SessionTabs';
+import { SessionMaster } from './components/SessionMaster';
 import { useVoiceRecognition } from './hooks/useVoiceRecognition';
 import { useSpeechSynthesis } from './hooks/useSpeechSynthesis';
 import { useSocket } from './hooks/useSocket';
 import { useHotkey } from './hooks/useHotkey';
+import { useSessionRouter } from './hooks/useSessionRouter';
 import { DEFAULT_APP_ENDPOINT, fetchAppState } from './services/api';
 import type {
   Conversation,
@@ -22,7 +26,9 @@ import type {
   Memory,
   Message,
   ProjectPlan,
-  RuntimeSummary
+  RuntimeSummary,
+  Session,
+  SessionStatus
 } from './types';
 import './styles/index.css';
 
@@ -33,7 +39,9 @@ const STORAGE_KEYS = {
   draft: 'jarvis.frontend.draft',
   conversationId: 'jarvis.frontend.conversationId',
   conversationCreatedAt: 'jarvis.frontend.conversationCreatedAt',
-  sessionId: 'jarvis.frontend.copilotSessionId'
+  sessionId: 'jarvis.frontend.copilotSessionId',
+  sessions: 'jarvis.frontend.sessions',
+  activeSessionId: 'jarvis.frontend.activeSessionId'
 } as const;
 
 const DEFAULT_SETTINGS: FrontendSettings = {
@@ -92,7 +100,53 @@ const buildConversationTitle = (messages: Message[]) => {
 };
 
 function App() {
-  const [messages, setMessages] = useState<Message[]>(() => readStoredValue(STORAGE_KEYS.messages, []));
+  // Multi-session state
+  const [sessions, setSessions] = useState<Session[]>(() => {
+    const stored = readStoredValue<Session[]>(STORAGE_KEYS.sessions, []);
+    if (stored.length === 0) {
+      const defaultSession: Session = {
+        id: createId('session'),
+        name: 'Main Session',
+        status: 'active' as SessionStatus,
+        objective: 'Default working session',
+        isListening: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        commandHistory: [],
+        priority: 1
+      };
+      return [defaultSession];
+    }
+    return stored;
+  });
+  
+  const [activeSessionId, setActiveSessionId] = useState<string>(() => {
+    const stored = readStoredValue<string>(STORAGE_KEYS.activeSessionId, '');
+    if (stored && sessions.find(s => s.id === stored)) {
+      return stored;
+    }
+    return sessions[0]?.id || '';
+  });
+
+  // Session-specific state maps
+  const [sessionMessages, setSessionMessages] = useState<Record<string, Message[]>>(() => {
+    const stored = readStoredValue<Record<string, Message[]>>(STORAGE_KEYS.messages, {});
+    if (Object.keys(stored).length === 0 && sessions[0]) {
+      return { [sessions[0].id]: [] };
+    }
+    return stored;
+  });
+
+  const [sessionTerminalOutput, setSessionTerminalOutput] = useState<Record<string, string[]>>(() => {
+    const initialOutput: Record<string, string[]> = {};
+    sessions.forEach(s => {
+      initialOutput[s.id] = [];
+    });
+    return initialOutput;
+  });
+
+  // Backward compatibility state
+  const [messages, setMessages] = useState<Message[]>(() => sessionMessages[activeSessionId] || []);
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
   const [inputText, setInputText] = useState(() => readStoredValue(STORAGE_KEYS.draft, ''));
@@ -169,6 +223,14 @@ function App() {
       return [...prev.slice(-2), { id: createId('notif'), message, type }];
     });
   }, []);
+
+  // Initialize session router with voice routing
+  const sessionRouter = useSessionRouter({
+    onSessionSwitched: (sessionId: string) => {
+      setActiveSessionId(sessionId);
+      addNotification(`✓ Switched to session: ${sessions.find(s => s.id === sessionId)?.name || sessionId}`, 'success');
+    }
+  });
 
   const removeNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((notification) => notification.id !== id));
@@ -277,6 +339,115 @@ function App() {
     void hydrateFromBackend(messages.length === 0);
   }, [hydrateFromBackend]);
 
+  // Sync sessions with session router
+  useEffect(() => {
+    const sessionIds = sessions.map(s => s.id);
+    sessionRouter.updateAvailableSessions(sessionIds);
+    if (activeSessionId) {
+      sessionRouter.setActiveSession(activeSessionId);
+    }
+  }, [sessions, activeSessionId, sessionRouter]);
+
+  // Handle active session change - sync messages and terminal output
+  useEffect(() => {
+    if (!activeSessionId) return;
+    
+    // Sync current working state to the map
+    setSessionMessages(prev => ({
+      ...prev,
+      [activeSessionId]: messages
+    }));
+
+    setSessionTerminalOutput(prev => ({
+      ...prev,
+      [activeSessionId]: terminalOutput
+    }));
+  }, [activeSessionId, messages, terminalOutput]);
+
+  // When switching sessions, load session-specific state
+  useEffect(() => {
+    if (!activeSessionId || !sessions.find(s => s.id === activeSessionId)) return;
+    
+    const sessionMsgs = sessionMessages[activeSessionId] || [];
+    const sessionTermOutput = sessionTerminalOutput[activeSessionId] || [];
+    
+    setMessages(sessionMsgs);
+    setTerminalOutput(sessionTermOutput);
+    
+    // Update session router about the switch
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (session) {
+      sessionRouter.rememberSession(activeSessionId);
+    }
+  }, [activeSessionId, sessionRouter, sessionMessages, sessionTerminalOutput, sessions]);
+
+  // Store sessions in localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(STORAGE_KEYS.sessions, JSON.stringify(sessions));
+    window.localStorage.setItem(STORAGE_KEYS.activeSessionId, activeSessionId);
+  }, [sessions, activeSessionId]);
+
+  // Create new session handler
+  const handleCreateSession = useCallback(() => {
+    const newSession: Session = {
+      id: createId('session'),
+      name: `Session ${sessions.length + 1}`,
+      status: 'active' as SessionStatus,
+      objective: 'New working session',
+      isListening: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      commandHistory: [],
+      priority: sessions.length + 1
+    };
+    
+    setSessions(prev => [...prev, newSession]);
+    setSessionMessages(prev => ({ ...prev, [newSession.id]: [] }));
+    setSessionTerminalOutput(prev => ({ ...prev, [newSession.id]: [] }));
+    setActiveSessionId(newSession.id);
+    addNotification(`✓ Created new session: ${newSession.name}`, 'success');
+    
+    if (socket && isConnected) {
+      socket.emit('session:create', {
+        name: newSession.name,
+        status: newSession.status,
+        objective: newSession.objective,
+        isListening: false,
+        priority: newSession.priority
+      });
+    }
+  }, [sessions.length, socket, isConnected, addNotification]);
+
+  // Close session handler
+  const handleCloseSession = useCallback((sessionId: string) => {
+    if (sessions.length <= 1) {
+      addNotification('Cannot close the last session.', 'warning');
+      return;
+    }
+    
+    setSessions(prev => prev.filter(s => s.id !== sessionId));
+    setSessionMessages(prev => {
+      const updated = { ...prev };
+      delete updated[sessionId];
+      return updated;
+    });
+    setSessionTerminalOutput(prev => {
+      const updated = { ...prev };
+      delete updated[sessionId];
+      return updated;
+    });
+    
+    if (activeSessionId === sessionId) {
+      const remaining = sessions.find(s => s.id !== sessionId);
+      if (remaining) {
+        setActiveSessionId(remaining.id);
+      }
+    }
+    
+    addNotification(`Session closed`, 'info');
+  }, [sessions, activeSessionId, addNotification]);
+
   useEffect(() => {
     if (isSpeaking) {
       setVoiceState('speaking');
@@ -348,12 +519,48 @@ function App() {
       setCurrentView('conversation');
     };
 
+    const handleSessionCreated = (session: Session) => {
+      setSessions(prev => {
+        const existing = prev.find(s => s.id === session.id);
+        if (existing) return prev;
+        return [...prev, session];
+      });
+      setSessionMessages(prev => ({ ...prev, [session.id]: [] }));
+      setSessionTerminalOutput(prev => ({ ...prev, [session.id]: [] }));
+    };
+
+    const handleSessionUpdated = (session: Session) => {
+      setSessions(prev => prev.map(s => s.id === session.id ? session : s));
+    };
+
+    const handleSessionSwitched = (data: { toSessionId: string; fromSessionId?: string; timestamp: number }) => {
+      setActiveSessionId(data.toSessionId);
+      sessionRouter.setActiveSession(data.toSessionId);
+    };
+
+    const handleSessionPaused = (data: { sessionId: string; timestamp: number }) => {
+      setSessions(prev => prev.map(s => 
+        s.id === data.sessionId ? { ...s, status: 'paused' as SessionStatus, updatedAt: data.timestamp } : s
+      ));
+    };
+
+    const handleSessionResumed = (data: { sessionId: string; timestamp: number }) => {
+      setSessions(prev => prev.map(s =>
+        s.id === data.sessionId ? { ...s, status: 'active' as SessionStatus, updatedAt: data.timestamp } : s
+      ));
+    };
+
     socket.on('copilot:output', handleOutput);
     socket.on('copilot:complete', handleComplete);
     socket.on('copilot:error', handleError);
     socket.on('memory:results', handleMemoryResults);
     socket.on('plan:update', handlePlanUpdate);
     socket.on('conversation:loaded', handleConversationLoaded);
+    socket.on('session:created', handleSessionCreated);
+    socket.on('session:updated', handleSessionUpdated);
+    socket.on('session:switched', handleSessionSwitched);
+    socket.on('session:paused', handleSessionPaused);
+    socket.on('session:resumed', handleSessionResumed);
 
     return () => {
       socket.off('copilot:output', handleOutput);
@@ -362,8 +569,13 @@ function App() {
       socket.off('memory:results', handleMemoryResults);
       socket.off('plan:update', handlePlanUpdate);
       socket.off('conversation:loaded', handleConversationLoaded);
+      socket.off('session:created', handleSessionCreated);
+      socket.off('session:updated', handleSessionUpdated);
+      socket.off('session:switched', handleSessionSwitched);
+      socket.off('session:paused', handleSessionPaused);
+      socket.off('session:resumed', handleSessionResumed);
     };
-  }, [addNotification, hydrateFromBackend, lastCommand, socket, speak]);
+  }, [addNotification, hydrateFromBackend, lastCommand, socket, speak, sessionRouter]);
 
   useEffect(() => {
     if (!settings.autoSave || !socket || !isConnected || messages.length === 0) {

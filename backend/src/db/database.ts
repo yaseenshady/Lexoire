@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import type { Conversation, Memory, Message, ProjectPlan, ProjectStep, Session, SessionStatus, SessionMessage } from '../types';
+import type { Conversation, Memory, Message, ProjectPlan, ProjectStep, Session, SessionStatus, SessionMessage, SessionContextShare } from '../types';
 
 type ConversationRow = {
   id: string;
@@ -55,8 +55,28 @@ type SessionRow = {
   objective: string | null;
   last_summary: string | null;
   focus_level: number;
+  metadata: string | null;
   created_at: number;
   updated_at: number;
+};
+
+type SessionArchiveRow = {
+  id: string;
+  name: string;
+  copilot_session_id: string;
+  repo_path: string;
+  objective: string | null;
+  final_summary: string | null;
+  created_at: number;
+  completed_at: number;
+};
+
+type SessionHistoryRow = {
+  id: number;
+  session_id: string;
+  action: string;
+  details: string | null;
+  timestamp: number;
 };
 
 type SessionMessageRow = {
@@ -64,6 +84,15 @@ type SessionMessageRow = {
   from_session_id: string;
   to_session_id: string;
   message: string;
+  created_at: number;
+};
+
+type SessionContextShareRow = {
+  id: number;
+  from_session_id: string;
+  to_session_id: string;
+  context: string;
+  context_type: 'objective' | 'summary' | 'metadata' | 'custom';
   created_at: number;
 };
 
@@ -138,8 +167,29 @@ class DatabaseService {
         objective TEXT,
         last_summary TEXT,
         focus_level INTEGER DEFAULT 0,
+        metadata TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS session_archive (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        copilot_session_id TEXT NOT NULL,
+        repo_path TEXT NOT NULL,
+        objective TEXT,
+        final_summary TEXT,
+        created_at INTEGER NOT NULL,
+        completed_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS session_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        details TEXT,
+        timestamp INTEGER NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS session_messages (
@@ -147,6 +197,17 @@ class DatabaseService {
         from_session_id TEXT NOT NULL,
         to_session_id TEXT NOT NULL,
         message TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY(from_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY(to_session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS session_context_share (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_session_id TEXT NOT NULL,
+        to_session_id TEXT NOT NULL,
+        context TEXT NOT NULL,
+        context_type TEXT NOT NULL CHECK(context_type IN ('objective', 'summary', 'metadata', 'custom')),
         created_at INTEGER NOT NULL,
         FOREIGN KEY(from_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
         FOREIGN KEY(to_session_id) REFERENCES sessions(id) ON DELETE CASCADE
@@ -160,8 +221,14 @@ class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_project_plans_updated_at ON project_plans(updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
       CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_session_archive_created_at ON session_archive(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_session_history_session ON session_history(session_id);
+      CREATE INDEX IF NOT EXISTS idx_session_history_timestamp ON session_history(timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_session_messages_from ON session_messages(from_session_id);
       CREATE INDEX IF NOT EXISTS idx_session_messages_to ON session_messages(to_session_id);
+      CREATE INDEX IF NOT EXISTS idx_session_context_share_from ON session_context_share(from_session_id);
+      CREATE INDEX IF NOT EXISTS idx_session_context_share_to ON session_context_share(to_session_id);
+      CREATE INDEX IF NOT EXISTS idx_session_context_share_created_at ON session_context_share(created_at DESC);
     `);
   }
 
@@ -468,6 +535,7 @@ class DatabaseService {
       objective: session.objective ?? undefined,
       lastSummary: session.last_summary ?? undefined,
       focusLevel: session.focus_level,
+      metadata: session.metadata ? JSON.parse(session.metadata) : undefined,
       createdAt: session.created_at,
       updatedAt: session.updated_at
     };
@@ -475,8 +543,8 @@ class DatabaseService {
 
   saveSession(session: Session): void {
     this.db.prepare(`
-      INSERT INTO sessions (id, name, copilot_session_id, repo_path, branch, status, objective, last_summary, focus_level, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO sessions (id, name, copilot_session_id, repo_path, branch, status, objective, last_summary, focus_level, metadata, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         copilot_session_id = excluded.copilot_session_id,
@@ -486,6 +554,7 @@ class DatabaseService {
         objective = excluded.objective,
         last_summary = excluded.last_summary,
         focus_level = excluded.focus_level,
+        metadata = excluded.metadata,
         updated_at = excluded.updated_at
     `).run(
       session.id,
@@ -497,6 +566,7 @@ class DatabaseService {
       session.objective ?? null,
       session.lastSummary ?? null,
       session.focusLevel,
+      session.metadata ? JSON.stringify(session.metadata) : null,
       session.createdAt,
       session.updatedAt
     );
@@ -573,8 +643,176 @@ class DatabaseService {
     }));
   }
 
+  saveSessionContextShare(share: Omit<SessionContextShare, 'id'>): number {
+    const result = this.db.prepare(`
+      INSERT INTO session_context_share (from_session_id, to_session_id, context, context_type, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      share.fromSessionId,
+      share.toSessionId,
+      JSON.stringify(share.context),
+      share.contextType,
+      share.createdAt
+    );
+
+    return result.lastInsertRowid as number;
+  }
+
+  getSessionContextShares(sessionId: string, limit: number = 50): SessionContextShare[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM session_context_share
+      WHERE from_session_id = ? OR to_session_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(sessionId, sessionId, limit) as SessionContextShareRow[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      fromSessionId: row.from_session_id,
+      toSessionId: row.to_session_id,
+      context: JSON.parse(row.context) as Record<string, unknown>,
+      contextType: row.context_type,
+      createdAt: row.created_at
+    }));
+  }
+
   getSessionCount(): number {
     return (this.db.prepare('SELECT COUNT(*) AS count FROM sessions').get() as { count: number }).count;
+  }
+
+  getActiveSessionsCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS count FROM sessions WHERE status IN (?, ?, ?)').get('idle', 'active', 'paused') as { count: number }).count;
+  }
+
+  getActiveAndPausedSessions(): Session[] {
+    const rows = this.db
+      .prepare('SELECT * FROM sessions WHERE status IN (?, ?) ORDER BY updated_at DESC')
+      .all('active', 'paused') as SessionRow[];
+    return rows.map((session) => this.mapSession(session));
+  }
+
+  logSessionHistory(sessionId: string, action: string, details?: Record<string, unknown>): void {
+    this.db.prepare(`
+      INSERT INTO session_history (session_id, action, details, timestamp)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      sessionId,
+      action,
+      details ? JSON.stringify(details) : null,
+      Date.now()
+    );
+  }
+
+  getSessionHistory(sessionId: string, limit: number = 100): Array<{ id: number; action: string; details?: Record<string, unknown>; timestamp: number }> {
+    const rows = this.db.prepare(`
+      SELECT * FROM session_history
+      WHERE session_id = ?
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `).all(sessionId, limit) as SessionHistoryRow[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      details: row.details ? JSON.parse(row.details) : undefined,
+      timestamp: row.timestamp
+    }));
+  }
+
+  archiveSession(sessionId: string): void {
+    const session = this.getSession(sessionId);
+    if (!session) {
+      return;
+    }
+
+    const now = Date.now();
+    this.db.prepare(`
+      INSERT INTO session_archive (id, name, copilot_session_id, repo_path, objective, final_summary, created_at, completed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      session.id,
+      session.name,
+      session.copilotSessionId,
+      session.repoPath,
+      session.objective ?? null,
+      session.lastSummary ?? null,
+      session.createdAt,
+      now
+    );
+
+    this.logSessionHistory(sessionId, 'archived', { archivedAt: now });
+  }
+
+  getArchivedSessions(limit: number = 50): Array<{
+    id: string;
+    name: string;
+    copilotSessionId: string;
+    repoPath: string;
+    objective?: string;
+    finalSummary?: string;
+    createdAt: number;
+    completedAt: number;
+  }> {
+    const rows = this.db.prepare(`
+      SELECT * FROM session_archive
+      ORDER BY completed_at DESC
+      LIMIT ?
+    `).all(limit) as SessionArchiveRow[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      copilotSessionId: row.copilot_session_id,
+      repoPath: row.repo_path,
+      objective: row.objective ?? undefined,
+      finalSummary: row.final_summary ?? undefined,
+      createdAt: row.created_at,
+      completedAt: row.completed_at
+    }));
+  }
+
+  restoreFromArchive(sessionId: string): void {
+    const archived = this.db.prepare('SELECT * FROM session_archive WHERE id = ?').get(sessionId) as SessionArchiveRow | undefined;
+    if (!archived) {
+      return;
+    }
+
+    const session: Session = {
+      id: archived.id,
+      name: archived.name,
+      copilotSessionId: archived.copilot_session_id,
+      repoPath: archived.repo_path,
+      branch: undefined,
+      status: 'idle',
+      objective: archived.objective ?? undefined,
+      lastSummary: archived.final_summary ?? undefined,
+      focusLevel: 0,
+      createdAt: archived.created_at,
+      updatedAt: Date.now()
+    };
+
+    this.saveSession(session);
+    this.logSessionHistory(sessionId, 'restored', { restoredAt: Date.now() });
+  }
+
+  deleteArchivedSession(sessionId: string): void {
+    this.db.prepare('DELETE FROM session_archive WHERE id = ?').run(sessionId);
+  }
+
+  clearOldSessions(daysOld: number): number {
+    const cutoffTime = Date.now() - (daysOld * 24 * 60 * 60 * 1000);
+
+    const completedSessionIds = this.db.prepare(`
+      SELECT id FROM sessions
+      WHERE status = 'completed' AND updated_at < ?
+    `).all(cutoffTime) as Array<{ id: string }>;
+
+    for (const { id } of completedSessionIds) {
+      this.archiveSession(id);
+      this.deleteSession(id);
+    }
+
+    return completedSessionIds.length;
   }
 
   close(): void {

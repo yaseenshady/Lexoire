@@ -299,6 +299,102 @@
     animation-duration: 10s;
   }
 
+  /* Session Visualization Animations */
+  @keyframes pulse-glow {
+    0%, 100% {
+      opacity: 1;
+      box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+    }
+    50% {
+      opacity: 0.6;
+      box-shadow: 0 0 16px rgba(251, 191, 36, 0.8);
+    }
+  }
+
+  .pulse-glow {
+    animation: pulse-glow 1.5s ease-in-out infinite;
+  }
+
+  @keyframes active-glow {
+    0%, 100% {
+      box-shadow: 0 0 12px rgba(6, 182, 212, 0.7);
+    }
+    50% {
+      box-shadow: 0 0 24px rgba(6, 182, 212, 1);
+    }
+  }
+
+  .active-glow {
+    animation: active-glow 2s ease-in-out infinite;
+  }
+
+  @keyframes blink-indicator {
+    0%, 49%, 100% {
+      opacity: 1;
+    }
+    50%, 99% {
+      opacity: 0.3;
+    }
+  }
+
+  .blink {
+    animation: blink-indicator 1s ease-in-out infinite;
+  }
+
+  @keyframes fade-pulse {
+    0%, 100% {
+      opacity: 0.4;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
+  .fade-pulse {
+    animation: fade-pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes slide-in-session {
+    from {
+      opacity: 0;
+      transform: translateX(-20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  .slide-in-session {
+    animation: slide-in-session 0.3s ease-out forwards;
+  }
+
+  @keyframes bounce-command {
+    0%, 100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.1);
+    }
+  }
+
+  .bounce-command {
+    animation: bounce-command 0.4s ease-in-out;
+  }
+
+  @keyframes spin-thinking {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .spin-thinking {
+    animation: spin-thinking 2s linear infinite;
+  }
+
   /* Data packet travel */
   @keyframes data-packet-travel {
     0% {

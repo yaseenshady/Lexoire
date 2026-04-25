@@ -11,6 +11,7 @@ import DatabaseService from './db/database';
 import CopilotService from './copilot/copilot-service';
 import AcademicPptService from './services/academic-ppt-service';
 import SessionManager from './services/session-manager';
+import SessionMessaging from './services/session-messaging';
 import logger from './services/logger';
 import type {
   AppState,
@@ -82,6 +83,7 @@ app.use(express.json());
 const db = new DatabaseService(DB_PATH);
 const copilotService = new CopilotService();
 const sessionManager = new SessionManager(db);
+const sessionMessaging = new SessionMessaging(db);
 
 function getInstalledVoices(): InstalledVoice[] {
   const result = spawnSync('say', ['-v', '?'], {
@@ -572,11 +574,16 @@ app.get('/api/memories', (req, res) => {
   }
 });
 
+// GET /api/sessions - List all active sessions with details
+// Response: { sessions: Session[], current?: string }
 app.get('/api/sessions', (req, res) => {
   try {
     const sessions = sessionManager.listSessions();
     logger.info(`Retrieved ${sessions.length} sessions`);
-    res.json(sessions);
+    
+    // Return sessions array with current session (first active one)
+    const current = sessions.find(s => s.status === 'active')?.id;
+    res.json({ sessions, current });
   } catch (error: unknown) {
     const message = getErrorMessage(error);
     logger.error('Failed to get sessions:', message);
@@ -584,22 +591,31 @@ app.get('/api/sessions', (req, res) => {
   }
 });
 
+// POST /api/sessions - Create new session
+// Body: { name: string, repo_path: string, branch?: string, objective?: string }
+// Response: { id: string, session: Session }
 app.post('/api/sessions', (req, res) => {
   try {
     const name = typeof req.body?.name === 'string' ? req.body.name : '';
-    const repoPath = typeof req.body?.repoPath === 'string' ? req.body.repoPath : '';
+    const repoPath = typeof req.body?.repo_path === 'string' ? req.body.repo_path : '';
     const branch = typeof req.body?.branch === 'string' ? req.body.branch : undefined;
+    const objective = typeof req.body?.objective === 'string' ? req.body.objective : undefined;
 
     if (!name.trim() || !repoPath.trim()) {
-      res.status(400).json({ error: 'name and repoPath are required' });
+      res.status(400).json({ error: 'name and repo_path are required' });
       return;
     }
 
     const session = sessionManager.createSession(name, repoPath, branch);
-    logger.info(`Created session: ${session.id}`);
+    if (objective) {
+      session.objective = objective;
+      sessionManager.updateSessionSummary(session.id, objective);
+    }
     
-    io.emit('session:created', session);
-    res.status(201).json(session);
+    logger.info(`Created session: ${session.id}`);
+    io.emit('session:created', { id: session.id, session });
+    
+    res.status(201).json({ id: session.id, session });
   } catch (error: unknown) {
     const message = getErrorMessage(error);
     logger.error('Failed to create session:', message);
@@ -607,6 +623,8 @@ app.post('/api/sessions', (req, res) => {
   }
 });
 
+// GET /api/sessions/:id - Get session details
+// Response: Session
 app.get('/api/sessions/:id', (req, res) => {
   try {
     const session = sessionManager.getSession(req.params.id);
@@ -624,7 +642,9 @@ app.get('/api/sessions/:id', (req, res) => {
   }
 });
 
-app.put('/api/sessions/:id', (req, res) => {
+// PUT /api/sessions/:id/switch - Switch to session (make it active)
+// Response: Session
+app.put('/api/sessions/:id/switch', (req, res) => {
   try {
     const session = sessionManager.getSession(req.params.id);
     if (!session) {
@@ -632,42 +652,78 @@ app.put('/api/sessions/:id', (req, res) => {
       return;
     }
 
-    const action = typeof req.body?.action === 'string' ? req.body.action : '';
-    
-    if (action === 'switch') {
-      const switched = sessionManager.switchSession(req.params.id);
-      if (switched) {
-        logger.info(`Switched to session: ${req.params.id}`);
-        io.emit('session:switched', switched);
-        res.json(switched);
-        return;
-      }
-    } else if (action === 'pause') {
-      sessionManager.pauseSession(req.params.id);
-      session.status = 'paused';
-      session.updatedAt = Date.now();
-      logger.info(`Paused session: ${req.params.id}`);
-      io.emit('session:status-changed', { sessionId: req.params.id, status: 'paused' });
-      res.json(session);
-      return;
-    } else if (action === 'resume') {
-      sessionManager.resumeSession(req.params.id);
-      session.status = 'active';
-      session.updatedAt = Date.now();
-      logger.info(`Resumed session: ${req.params.id}`);
-      io.emit('session:status-changed', { sessionId: req.params.id, status: 'active' });
-      res.json(session);
+    const switched = sessionManager.switchSession(req.params.id);
+    if (!switched) {
+      res.status(500).json({ error: 'Failed to switch session' });
       return;
     }
 
-    res.status(400).json({ error: 'Invalid action' });
+    logger.info(`Switched to session: ${req.params.id}`);
+    io.emit('session:switched', { id: req.params.id, session: switched });
+    res.json(switched);
   } catch (error: unknown) {
     const message = getErrorMessage(error);
-    logger.error('Failed to update session:', message);
+    logger.error('Failed to switch session:', message);
     res.status(500).json({ error: message });
   }
 });
 
+// PUT /api/sessions/:id/pause - Pause session
+// Response: { status: 'paused' }
+app.put('/api/sessions/:id/pause', (req, res) => {
+  try {
+    const session = sessionManager.getSession(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    if (session.status === 'paused') {
+      res.status(400).json({ error: 'Session is already paused' });
+      return;
+    }
+
+    sessionManager.pauseSession(req.params.id);
+    logger.info(`Paused session: ${req.params.id}`);
+    io.emit('session:status-changed', { id: req.params.id, status: 'paused' });
+    
+    res.json({ status: 'paused' });
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to pause session:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
+// PUT /api/sessions/:id/resume - Resume session
+// Response: { status: 'active' }
+app.put('/api/sessions/:id/resume', (req, res) => {
+  try {
+    const session = sessionManager.getSession(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    if (session.status !== 'paused') {
+      res.status(400).json({ error: 'Session is not paused' });
+      return;
+    }
+
+    sessionManager.resumeSession(req.params.id);
+    logger.info(`Resumed session: ${req.params.id}`);
+    io.emit('session:status-changed', { id: req.params.id, status: 'active' });
+    
+    res.json({ status: 'active' });
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to resume session:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
+// DELETE /api/sessions/:id - Close/archive session
+// Response: { archived: true }
 app.delete('/api/sessions/:id', (req, res) => {
   try {
     const session = sessionManager.getSession(req.params.id);
@@ -678,11 +734,174 @@ app.delete('/api/sessions/:id', (req, res) => {
 
     sessionManager.closeSession(req.params.id);
     logger.info(`Closed session: ${req.params.id}`);
+    io.emit('session:updated', { id: req.params.id, session });
     
-    res.status(204).end();
+    res.json({ archived: true });
   } catch (error: unknown) {
     const message = getErrorMessage(error);
     logger.error('Failed to close session:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
+// PUT /api/sessions/:id/status - Update session status
+// Body: { status: 'idle'|'thinking'|'active'|'paused' }
+// Response: Session
+app.put('/api/sessions/:id/status', (req, res) => {
+  try {
+    const session = sessionManager.getSession(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const status = typeof req.body?.status === 'string' ? req.body.status : '';
+    const validStatuses = ['idle', 'thinking', 'active', 'paused'];
+    
+    if (!validStatuses.includes(status)) {
+      res.status(400).json({ 
+        error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+      });
+      return;
+    }
+
+    sessionManager.updateSessionStatus(req.params.id, status as any);
+    const updatedSession = sessionManager.getSession(req.params.id);
+    
+    logger.info(`Updated session status: ${req.params.id} → ${status}`);
+    io.emit('session:status-changed', { id: req.params.id, status });
+    
+    res.json(updatedSession);
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to update session status:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
+// POST /api/sessions/:id/message - Send message to session
+// Body: { message: string, broadcast?: boolean }
+// Response: { sent: true }
+app.post('/api/sessions/:id/message', (req, res) => {
+  try {
+    const toSessionId = req.params.id;
+    const session = sessionManager.getSession(toSessionId);
+    
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const message = typeof req.body?.message === 'string' ? req.body.message : '';
+    const broadcast = req.body?.broadcast === true;
+
+    if (!message.trim()) {
+      res.status(400).json({ error: 'message is required' });
+      return;
+    }
+
+    // Get the first active session as sender if not broadcast
+    const fromSession = !broadcast 
+      ? sessionManager.listSessions().find(s => s.status === 'active')
+      : null;
+    
+    const fromSessionId = fromSession?.id || 'system';
+    
+    // Save message using the messaging service
+    sessionMessaging.sendMessage(fromSessionId, toSessionId, message.trim());
+
+    logger.info(`Message sent to session ${toSessionId}: "${message.substring(0, 50)}..."`);
+    io.emit('session:message', { 
+      from: fromSessionId, 
+      to: toSessionId, 
+      message: message.trim() 
+    });
+    
+    res.json({ sent: true });
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to send message:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
+// GET /api/sessions/:id/messages - Retrieve messages for a session
+// Query: limit (optional, default 50)
+// Response: { messages: SessionMessage[] }
+app.get('/api/sessions/:id/messages', (req, res) => {
+  try {
+    const sessionId = req.params.id;
+    const session = sessionManager.getSession(sessionId);
+    
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const limit = Math.min(Number.parseInt(req.query.limit as string) || 50, 200);
+    const messages = sessionMessaging.getMessages(sessionId, limit);
+
+    res.json({ messages });
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to retrieve messages:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
+// POST /api/sessions/:id/share-context - Share context with another session
+// Body: { toSessionId: string, context: Record<string, unknown>, contextType?: 'objective' | 'summary' | 'metadata' | 'custom' }
+// Response: { shared: true }
+app.post('/api/sessions/:id/share-context', (req, res) => {
+  try {
+    const fromSessionId = req.params.id;
+    const toSessionId = req.body?.toSessionId;
+    const context = req.body?.context;
+    const contextType = req.body?.contextType || 'custom';
+
+    const fromSession = sessionManager.getSession(fromSessionId);
+    const toSession = sessionManager.getSession(toSessionId);
+
+    if (!fromSession) {
+      res.status(404).json({ error: 'Source session not found' });
+      return;
+    }
+
+    if (!toSession) {
+      res.status(404).json({ error: 'Target session not found' });
+      return;
+    }
+
+    if (!context || typeof context !== 'object') {
+      res.status(400).json({ error: 'context is required and must be an object' });
+      return;
+    }
+
+    if (!['objective', 'summary', 'metadata', 'custom'].includes(contextType)) {
+      res.status(400).json({ error: 'Invalid contextType' });
+      return;
+    }
+
+    // Share context using the messaging service
+    sessionMessaging.shareContext(
+      fromSessionId,
+      toSessionId,
+      context as Record<string, unknown>,
+      contextType as 'objective' | 'summary' | 'metadata' | 'custom'
+    );
+
+    logger.info(`Context shared from session ${fromSessionId} to ${toSessionId} (type: ${contextType})`);
+    io.emit('session:context-shared', {
+      from: fromSessionId,
+      to: toSessionId,
+      contextType,
+      context
+    });
+
+    res.json({ shared: true });
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to share context:', message);
     res.status(500).json({ error: message });
   }
 });
@@ -817,7 +1036,149 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Session event handlers
+  // Socket.IO session management event handlers
+  
+  // Client emits session:list-request
+  socket.on('session:list-request', () => {
+    try {
+      const sessions = sessionManager.listSessions();
+      const current = sessions.find(s => s.status === 'active')?.id;
+      logger.info(`Session list requested - ${sessions.length} active sessions`);
+      socket.emit('session:list', { sessions, current });
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Failed to list sessions:', message);
+      socket.emit('copilot:error', message);
+    }
+  });
+
+  // Client emits session:create
+  socket.on('session:create', (data: { name: string; repo_path: string; objective?: string; branch?: string }) => {
+    try {
+      const name = typeof data?.name === 'string' ? data.name : '';
+      const repo_path = typeof data?.repo_path === 'string' ? data.repo_path : '';
+      const branch = typeof data?.branch === 'string' ? data.branch : undefined;
+      const objective = typeof data?.objective === 'string' ? data.objective : undefined;
+
+      if (!name.trim() || !repo_path.trim()) {
+        socket.emit('copilot:error', 'name and repo_path are required');
+        return;
+      }
+
+      const session = sessionManager.createSession(name, repo_path, branch);
+      if (objective) {
+        session.objective = objective;
+        sessionManager.updateSessionSummary(session.id, objective);
+      }
+
+      logger.info(`Session created via Socket.IO: ${session.id}`);
+      io.emit('session:created', { id: session.id, session });
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Failed to create session:', message);
+      socket.emit('copilot:error', message);
+    }
+  });
+
+  // Client emits session:switch
+  socket.on('session:switch', (data: { id: string }) => {
+    try {
+      const sessionId = typeof data?.id === 'string' ? data.id : '';
+      const session = sessionManager.getSession(sessionId);
+      
+      if (!session) {
+        socket.emit('copilot:error', 'Session not found');
+        return;
+      }
+
+      const switched = sessionManager.switchSession(sessionId);
+      if (!switched) {
+        socket.emit('copilot:error', 'Failed to switch session');
+        return;
+      }
+      logger.info(`Session switched via Socket.IO: ${sessionId}`);
+      io.emit('session:switched', { id: sessionId, session: switched });
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Failed to switch session:', message);
+      socket.emit('copilot:error', message);
+    }
+  });
+
+  // Client emits session:pause
+  socket.on('session:pause', (data: { id: string }) => {
+    try {
+      const sessionId = typeof data?.id === 'string' ? data.id : '';
+      const session = sessionManager.getSession(sessionId);
+      
+      if (!session) {
+        socket.emit('copilot:error', 'Session not found');
+        return;
+      }
+
+      if (session.status === 'paused') {
+        socket.emit('copilot:error', 'Session is already paused');
+        return;
+      }
+
+      sessionManager.pauseSession(sessionId);
+      logger.info(`Session paused via Socket.IO: ${sessionId}`);
+      io.emit('session:status-changed', { id: sessionId, status: 'paused' });
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Failed to pause session:', message);
+      socket.emit('copilot:error', message);
+    }
+  });
+
+  // Client emits session:resume
+  socket.on('session:resume', (data: { id: string }) => {
+    try {
+      const sessionId = typeof data?.id === 'string' ? data.id : '';
+      const session = sessionManager.getSession(sessionId);
+      
+      if (!session) {
+        socket.emit('copilot:error', 'Session not found');
+        return;
+      }
+
+      if (session.status !== 'paused') {
+        socket.emit('copilot:error', 'Session is not paused');
+        return;
+      }
+
+      sessionManager.resumeSession(sessionId);
+      logger.info(`Session resumed via Socket.IO: ${sessionId}`);
+      io.emit('session:status-changed', { id: sessionId, status: 'active' });
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Failed to resume session:', message);
+      socket.emit('copilot:error', message);
+    }
+  });
+
+  // Client emits session:close
+  socket.on('session:close', (data: { id: string }) => {
+    try {
+      const sessionId = typeof data?.id === 'string' ? data.id : '';
+      const session = sessionManager.getSession(sessionId);
+      
+      if (!session) {
+        socket.emit('copilot:error', 'Session not found');
+        return;
+      }
+
+      sessionManager.closeSession(sessionId);
+      logger.info(`Session closed via Socket.IO: ${sessionId}`);
+      io.emit('session:updated', { id: sessionId, session });
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Failed to close session:', message);
+      socket.emit('copilot:error', message);
+    }
+  });
+
+  // Disconnect handler
   socket.on('disconnect', () => {
     logger.warning(`Client disconnected: ${socket.id}`);
   });

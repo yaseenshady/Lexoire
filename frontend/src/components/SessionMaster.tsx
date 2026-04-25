@@ -107,23 +107,23 @@ export const SessionMaster: React.FC<SessionMasterProps> = ({
     if (session) {
       setSelectedSession({ ...session, isActive: true });
       onSwitchSession(sessionId);
-      socket?.emit('session:switch', sessionId);
+      socket?.emit('session:switch', { toSessionId: sessionId, timestamp: Date.now() });
     }
   }, [sessions, onSwitchSession, socket]);
 
   const handlePauseSession = useCallback((sessionId: string) => {
     onPauseSession(sessionId);
-    socket?.emit('session:pause', sessionId);
+    socket?.emit('session:pause', { sessionId, timestamp: Date.now() });
   }, [onPauseSession, socket]);
 
   const handleResumeSession = useCallback((sessionId: string) => {
     onResumeSession(sessionId);
-    socket?.emit('session:resume', sessionId);
+    socket?.emit('session:resume', { sessionId, timestamp: Date.now() });
   }, [onResumeSession, socket]);
 
   const handleBroadcastMessage = useCallback(() => {
     if (broadcastMessage.trim()) {
-      socket?.emit('session:broadcast', broadcastMessage);
+      socket?.emit('session:broadcast', { message: broadcastMessage, timestamp: Date.now() });
       setBroadcastMessage('');
     }
   }, [broadcastMessage, socket]);
@@ -176,7 +176,7 @@ export const SessionMaster: React.FC<SessionMasterProps> = ({
           <h1 className="text-4xl font-bold neon-text">Session Master</h1>
           <motion.div
             className="flex items-center gap-2 px-3 py-1 rounded-full border border-neon-cyan/40 bg-neon-cyan/10"
-            animate={{ glow: isListening ? [0, 1, 0] : 0 }}
+            animate={isListening ? { scale: [0.95, 1.05, 0.95] } : {}}
             transition={{ duration: 1.5, repeat: Infinity }}
           >
             <motion.div
@@ -238,7 +238,7 @@ export const SessionMaster: React.FC<SessionMasterProps> = ({
           </div>
 
           <motion.button
-            onClick={() => socket?.emit('session:broadcast', `Priority filter at level ${priorityFilter}`)}
+            onClick={() => socket?.emit('session:broadcast', { message: `Priority filter at level ${priorityFilter}`, timestamp: Date.now() })}
             className="px-4 py-3 rounded-lg bg-neon-purple/20 border border-neon-purple/40 text-neon-purple hover:bg-neon-purple/30 font-semibold transition-all"
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}

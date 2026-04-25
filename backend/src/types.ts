@@ -20,6 +20,7 @@ export interface Session {
   objective?: string;
   lastSummary?: string;
   focusLevel: number;
+  metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
 }
@@ -29,6 +30,15 @@ export interface SessionMessage {
   fromSessionId: string;
   toSessionId: string;
   message: string;
+  createdAt: number;
+}
+
+export interface SessionContextShare {
+  id: number;
+  fromSessionId: string;
+  toSessionId: string;
+  context: Record<string, unknown>;
+  contextType: 'objective' | 'summary' | 'metadata' | 'custom';
   createdAt: number;
 }
 
@@ -120,6 +130,14 @@ export interface SocketEvents {
   'conversation:load': (id: string) => void;
   'memory:search': (query: string) => void;
 
+  // Session events - Client to Server
+  'session:create': (data: { name: string; repo_path: string; objective?: string; branch?: string }) => void;
+  'session:switch': (data: { id: string }) => void;
+  'session:pause': (data: { id: string }) => void;
+  'session:resume': (data: { id: string }) => void;
+  'session:close': (data: { id: string }) => void;
+  'session:list-request': () => void;
+
   // Server to Client
   'copilot:output': (data: { chunk: string; type: 'stdout' | 'stderr' }) => void;
   'copilot:complete': (response: CopilotResponse) => void;
@@ -129,9 +147,12 @@ export interface SocketEvents {
   'plan:update': (plan: ProjectPlan | null) => void;
   'connection:status': (status: 'connected' | 'disconnected') => void;
 
-  // Session events
-  'session:created': (session: Session) => void;
-  'session:switched': (session: Session) => void;
-  'session:status-changed': (data: { sessionId: string; status: SessionStatus }) => void;
-  'session:updated': (session: Session) => void;
+  // Session events - Server to Client
+  'session:created': (data: { id: string; session: Session }) => void;
+  'session:list': (data: { sessions: Session[]; current?: string }) => void;
+  'session:switched': (data: { id: string; session: Session }) => void;
+  'session:status-changed': (data: { id: string; status: SessionStatus }) => void;
+  'session:updated': (data: { id: string; session: Session }) => void;
+  'session:message': (data: { from: string; to: string; message: string }) => void;
+  'session:context-shared': (data: { from: string; to: string; contextType: string; context: Record<string, unknown> }) => void;
 }

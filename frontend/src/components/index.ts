@@ -4,6 +4,10 @@ export { SessionTabs } from './SessionTabs';
 export { SessionMaster } from './SessionMaster';
 export { MultiSessionDashboard } from './MultiSessionDashboard';
 
+// Session Visualization Components
+export { SessionIndicator } from './SessionIndicator';
+export { ActivityGraph } from './ActivityGraph';
+
 // Existing components - named exports
 export { VoiceOrb } from './VoiceOrb';
 export { VoiceStatus } from './VoiceStatus';
