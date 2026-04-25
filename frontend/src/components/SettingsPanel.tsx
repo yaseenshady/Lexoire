@@ -98,6 +98,48 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, settings, 
                 </p>
               </div>
 
+               <div>
+                 <div className="flex items-center justify-between gap-4 mb-2">
+                   <label className="block text-sm font-semibold text-white/80">
+                     Voice Pitch
+                   </label>
+                   <span className="text-xs text-white/50">{settings.speechPitch.toFixed(2)}</span>
+                 </div>
+                 <input
+                   type="range"
+                   min="0.5"
+                   max="2.0"
+                   step="0.1"
+                   value={settings.speechPitch}
+                   onChange={(e) => onChange('speechPitch', Number.parseFloat(e.target.value))}
+                   className="w-full accent-cyan-300"
+                 />
+                 <p className="text-xs text-white/50 mt-2">
+                   Adjust the pitch for a more natural tone. Higher values sound higher-pitched.
+                 </p>
+               </div>
+
+               <div>
+                 <div className="flex items-center justify-between gap-4 mb-2">
+                   <label className="block text-sm font-semibold text-white/80">
+                     Voice Volume
+                   </label>
+                   <span className="text-xs text-white/50">{Math.round(settings.speechVolume * 100)}%</span>
+                 </div>
+                 <input
+                   type="range"
+                   min="0.1"
+                   max="1.0"
+                   step="0.1"
+                   value={settings.speechVolume}
+                   onChange={(e) => onChange('speechVolume', Number.parseFloat(e.target.value))}
+                   className="w-full accent-cyan-300"
+                 />
+                 <p className="text-xs text-white/50 mt-2">
+                   Control the volume of the voice output.
+                 </p>
+               </div>
+
               <div>
                 <label className="block text-sm font-semibold mb-2 text-white/80">
                   App Endpoint

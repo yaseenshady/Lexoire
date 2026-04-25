@@ -40,6 +40,8 @@ const DEFAULT_SETTINGS: FrontendSettings = {
   voiceLang: 'en-US',
   voiceStyle: 'natural',
   speechRate: 0.92,
+  speechPitch: 1.0,
+  speechVolume: 1.0,
   autoSave: true,
   continuousListening: true,
   apiEndpoint: DEFAULT_APP_ENDPOINT,
@@ -152,6 +154,8 @@ function App() {
     lang: settings.voiceLang,
     voiceStyle: settings.voiceStyle,
     rate: settings.speechRate,
+    pitch: settings.speechPitch,
+    volume: settings.speechVolume,
     fallbackEndpoint: settings.apiEndpoint
   });
 

@@ -10,6 +10,7 @@ import dotenv from 'dotenv';
 import DatabaseService from './db/database';
 import CopilotService from './copilot/copilot-service';
 import AcademicPptService from './services/academic-ppt-service';
+import SessionManager from './services/session-manager';
 import logger from './services/logger';
 import type {
   AppState,
@@ -19,7 +20,8 @@ import type {
   ProjectPlan,
   RuntimeSummary,
   SocketEvents,
-  VoiceCommand
+  VoiceCommand,
+  Session
 } from './types';
 
 dotenv.config();
@@ -29,6 +31,8 @@ const DEFAULT_PORT = 5000;
 const DEFAULT_FRONTEND_ORIGIN = 'http://localhost:3000';
 const FRONTEND_DIST_PATH = path.resolve(__dirname, '../../frontend/dist');
 const DEFAULT_SPEECH_RATE = 185;
+const DEFAULT_SPEECH_PITCH = 100;
+const DEFAULT_SPEECH_VOLUME = 100;
 const FALLBACK_SPEECH_VOICE_BY_LOCALE: Record<string, string[]> = {
   'en-us': ['Flo (English (US))', 'Eddy (English (US))', 'Samantha', 'Allison', 'Ava', 'Alex'],
   'en-gb': ['Flo (English (UK))', 'Eddy (English (UK))', 'Daniel', 'Serena'],
@@ -77,6 +81,7 @@ app.use(express.json());
 
 const db = new DatabaseService(DB_PATH);
 const copilotService = new CopilotService();
+const sessionManager = new SessionManager(db);
 
 function getInstalledVoices(): InstalledVoice[] {
   const result = spawnSync('say', ['-v', '?'], {
@@ -173,6 +178,22 @@ function clampSpeechRate(rate?: number): number {
 
   return Math.min(240, Math.max(150, Math.round(normalizedRate)));
 }
+
+function clampSpeechPitch(pitch?: number): number {
+  const normalizedPitch = typeof pitch === 'number' && Number.isFinite(pitch)
+    ? pitch
+    : DEFAULT_SPEECH_PITCH;
+
+  return Math.min(200, Math.max(50, Math.round(normalizedPitch)));
+}
+
+function clampSpeechVolume(volume?: number): number {
+  const normalizedVolume = typeof volume === 'number' && Number.isFinite(volume)
+    ? volume
+    : DEFAULT_SPEECH_VOLUME;
+
+  return Math.min(100, Math.max(1, Math.round(normalizedVolume)));
+}
 const academicPptService = new AcademicPptService();
 
 function canListenOnPort(port: number): Promise<boolean> {
@@ -243,7 +264,8 @@ function buildRuntimeSummary(): RuntimeSummary {
     academicPptBaseUrl: academicPptStatus.baseUrl,
     conversationCount: db.getConversationCount(),
     memoryCount: db.getMemoryCount(),
-    projectPlanCount: db.getProjectPlanCount()
+    projectPlanCount: db.getProjectPlanCount(),
+    sessionCount: sessionManager.getSessionCount()
   };
 }
 
@@ -352,7 +374,14 @@ function completeExecutionPlan(plan: ProjectPlan, response: CopilotResponse, upd
   };
 }
 
-function speakWithSystemVoice(text: string, lang?: string, requestedVoice?: string, requestedRate?: number): Promise<void> {
+function speakWithSystemVoice(
+  text: string,
+  lang?: string,
+  requestedVoice?: string,
+  requestedRate?: number,
+  requestedPitch?: number,
+  requestedVolume?: number
+): Promise<void> {
   const message = normalizeSpeechText(text);
   if (!message) {
     return Promise.resolve();
@@ -360,6 +389,7 @@ function speakWithSystemVoice(text: string, lang?: string, requestedVoice?: stri
 
   const voice = resolveSpeechVoice(lang, requestedVoice);
   const rate = clampSpeechRate(requestedRate);
+  const volume = clampSpeechVolume(requestedVolume);
   const args = [
     ...(voice ? ['-v', voice] : []),
     '-r',
@@ -479,6 +509,8 @@ app.post('/api/speak', async (req, res) => {
   const lang = typeof req.body?.lang === 'string' ? req.body.lang : undefined;
   const voice = typeof req.body?.voice === 'string' ? req.body.voice.trim() : undefined;
   const rate = typeof req.body?.rate === 'number' ? req.body.rate : undefined;
+  const pitch = typeof req.body?.pitch === 'number' ? req.body.pitch : undefined;
+  const volume = typeof req.body?.volume === 'number' ? req.body.volume : undefined;
 
   if (!text.trim()) {
     res.status(400).json({ error: 'Text is required' });
@@ -486,7 +518,7 @@ app.post('/api/speak', async (req, res) => {
   }
 
   try {
-    await speakWithSystemVoice(text, lang, voice, rate);
+    await speakWithSystemVoice(text, lang, voice, rate, pitch, volume);
     res.status(204).end();
   } catch (error: unknown) {
     const message = getErrorMessage(error);
@@ -540,6 +572,121 @@ app.get('/api/memories', (req, res) => {
   }
 });
 
+app.get('/api/sessions', (req, res) => {
+  try {
+    const sessions = sessionManager.listSessions();
+    logger.info(`Retrieved ${sessions.length} sessions`);
+    res.json(sessions);
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to get sessions:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/sessions', (req, res) => {
+  try {
+    const name = typeof req.body?.name === 'string' ? req.body.name : '';
+    const repoPath = typeof req.body?.repoPath === 'string' ? req.body.repoPath : '';
+    const branch = typeof req.body?.branch === 'string' ? req.body.branch : undefined;
+
+    if (!name.trim() || !repoPath.trim()) {
+      res.status(400).json({ error: 'name and repoPath are required' });
+      return;
+    }
+
+    const session = sessionManager.createSession(name, repoPath, branch);
+    logger.info(`Created session: ${session.id}`);
+    
+    io.emit('session:created', session);
+    res.status(201).json(session);
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to create session:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/sessions/:id', (req, res) => {
+  try {
+    const session = sessionManager.getSession(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    logger.info(`Retrieved session: ${req.params.id}`);
+    res.json(session);
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to get session:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.put('/api/sessions/:id', (req, res) => {
+  try {
+    const session = sessionManager.getSession(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const action = typeof req.body?.action === 'string' ? req.body.action : '';
+    
+    if (action === 'switch') {
+      const switched = sessionManager.switchSession(req.params.id);
+      if (switched) {
+        logger.info(`Switched to session: ${req.params.id}`);
+        io.emit('session:switched', switched);
+        res.json(switched);
+        return;
+      }
+    } else if (action === 'pause') {
+      sessionManager.pauseSession(req.params.id);
+      session.status = 'paused';
+      session.updatedAt = Date.now();
+      logger.info(`Paused session: ${req.params.id}`);
+      io.emit('session:status-changed', { sessionId: req.params.id, status: 'paused' });
+      res.json(session);
+      return;
+    } else if (action === 'resume') {
+      sessionManager.resumeSession(req.params.id);
+      session.status = 'active';
+      session.updatedAt = Date.now();
+      logger.info(`Resumed session: ${req.params.id}`);
+      io.emit('session:status-changed', { sessionId: req.params.id, status: 'active' });
+      res.json(session);
+      return;
+    }
+
+    res.status(400).json({ error: 'Invalid action' });
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to update session:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.delete('/api/sessions/:id', (req, res) => {
+  try {
+    const session = sessionManager.getSession(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    sessionManager.closeSession(req.params.id);
+    logger.info(`Closed session: ${req.params.id}`);
+    
+    res.status(204).end();
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to close session:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
 if (existsSync(FRONTEND_DIST_PATH)) {
   app.use(express.static(FRONTEND_DIST_PATH));
 
@@ -562,6 +709,15 @@ io.on('connection', (socket) => {
 
   socket.on('voice:command', (command: VoiceCommand) => {
     logger.info(`Voice command received: "${command.transcript}" (confidence: ${command.confidence})`);
+  });
+
+  socket.on('voice:routing', (data: { transcript: string; confidence: number; timestamp: number; sessionId?: string; routing?: any }) => {
+    logger.info(`Voice routing received: "${data.transcript}" → ${data.sessionId || 'broadcast'}`);
+    if (data.routing) {
+      logger.info(`  - Targets: ${data.routing.targetSessions?.join(', ') || 'all'}`);
+      logger.info(`  - Command: ${data.routing.command}`);
+      logger.info(`  - Broadcast: ${data.routing.broadcast}`);
+    }
   });
 
   socket.on('copilot:execute', async (command: CopilotCommand) => {
@@ -661,6 +817,7 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Session event handlers
   socket.on('disconnect', () => {
     logger.warning(`Client disconnected: ${socket.id}`);
   });

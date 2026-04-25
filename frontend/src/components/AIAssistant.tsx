@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import JarvisSphere from './JarvisSphere';
+import NeuralGraphSphere from './NeuralGraphSphere';
 
 interface AIAssistantProps {
   isListening?: boolean;
@@ -72,7 +72,7 @@ const AIAssistant: React.FC<AIAssistantProps> = ({
 
         {/* AI Core Sphere */}
         <div className="relative">
-          <JarvisSphere
+          <NeuralGraphSphere
             state={sphereState}
             size={280}
             accent={accentColor}

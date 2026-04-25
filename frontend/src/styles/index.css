@@ -5,6 +5,13 @@
 @layer base {
   :root {
     color-scheme: dark;
+    /* Theme CSS variables */
+    --theme-primary: #00ffff;
+    --theme-secondary: #bf00ff;
+    --theme-accent: #ff00ff;
+    --theme-background: #0a0a0a;
+    --theme-text: #ffffff;
+    --theme-glow: rgba(0, 255, 255, 0.5);
   }
 
   html {
@@ -336,5 +343,74 @@
       radial-gradient(circle at 80% 30%, rgba(191, 0, 255, 0.15) 0%, transparent 50%),
       radial-gradient(circle at 50% 100%, rgba(255, 0, 127, 0.1) 0%, transparent 60%),
       linear-gradient(135deg, #0a0a0a 0%, #1a0a2e 50%, #000000 100%);
+  }
+
+  /* Theme-aware utilities */
+  .theme-primary {
+    color: var(--theme-primary);
+  }
+
+  .theme-bg-primary {
+    background-color: var(--theme-primary);
+  }
+
+  .theme-glow {
+    box-shadow: 0 0 20px var(--theme-glow), 0 0 40px var(--theme-glow);
+  }
+
+  .theme-border {
+    border-color: var(--theme-primary);
+  }
+
+  .theme-text {
+    color: var(--theme-text);
+  }
+
+  /* Noir theme specific */
+  @media (prefers-color-scheme: dark) {
+    [data-theme="noir"] {
+      --theme-primary: #ffffff;
+      --theme-secondary: #f0f0f0;
+      --theme-accent: #ffff00;
+      --theme-background: #000000;
+      --theme-text: #ffffff;
+      --theme-glow: rgba(255, 255, 255, 0.4);
+    }
+
+    [data-theme="noir"] body {
+      background: linear-gradient(135deg, #000000 0%, #1a1a1a 50%, #000000 100%);
+    }
+
+    [data-theme="noir"] .glass {
+      box-shadow: 
+        0 8px 32px rgba(255, 255, 255, 0.1),
+        inset 0 1px 1px rgba(255, 255, 255, 0.2),
+        inset 0 -1px 1px rgba(0, 0, 0, 0.5);
+    }
+  }
+
+  /* Sunburst theme specific */
+  @media (prefers-color-scheme: dark) {
+    [data-theme="sunburst"] {
+      --theme-primary: #ffff00;
+      --theme-secondary: #ffcc00;
+      --theme-accent: #ffffff;
+      --theme-background: #000000;
+      --theme-text: #ffffff;
+      --theme-glow: rgba(255, 255, 0, 0.6);
+    }
+
+    [data-theme="sunburst"] body {
+      background: 
+        radial-gradient(circle at 50% 0%, rgba(255, 255, 0, 0.15) 0%, transparent 40%),
+        linear-gradient(135deg, #000000 0%, #0a0a00 50%, #000000 100%);
+    }
+
+    [data-theme="sunburst"] .glass {
+      box-shadow: 
+        0 8px 32px rgba(255, 255, 0, 0.1),
+        inset 0 1px 1px rgba(255, 255, 0, 0.1),
+        inset 0 -1px 1px rgba(0, 0, 0, 0.5);
+    }
   }
 }

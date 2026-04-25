@@ -5,6 +5,8 @@ interface SpeechSynthesisOptions {
   lang: string;
   voiceStyle?: 'natural' | 'clear' | 'default';
   rate?: number;
+  pitch?: number;
+  volume?: number;
   fallbackEndpoint?: string;
 }
 

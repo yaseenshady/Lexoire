@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import type { Conversation, Memory, Message, ProjectPlan, ProjectStep } from '../types';
+import type { Conversation, Memory, Message, ProjectPlan, ProjectStep, Session, SessionStatus, SessionMessage } from '../types';
 
 type ConversationRow = {
   id: string;
@@ -43,6 +43,28 @@ type ProjectStepRow = {
   output: string | null;
   error: string | null;
   step_order: number;
+};
+
+type SessionRow = {
+  id: string;
+  name: string;
+  copilot_session_id: string;
+  repo_path: string;
+  branch: string | null;
+  status: SessionStatus;
+  objective: string | null;
+  last_summary: string | null;
+  focus_level: number;
+  created_at: number;
+  updated_at: number;
+};
+
+type SessionMessageRow = {
+  id: number;
+  from_session_id: string;
+  to_session_id: string;
+  message: string;
+  created_at: number;
 };
 
 class DatabaseService {
@@ -106,12 +128,40 @@ class DatabaseService {
         FOREIGN KEY (plan_id) REFERENCES project_plans(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        copilot_session_id TEXT NOT NULL,
+        repo_path TEXT NOT NULL,
+        branch TEXT,
+        status TEXT CHECK(status IN ('idle', 'thinking', 'active', 'paused', 'completed')) DEFAULT 'idle',
+        objective TEXT,
+        last_summary TEXT,
+        focus_level INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS session_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_session_id TEXT NOT NULL,
+        to_session_id TEXT NOT NULL,
+        message TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY(from_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY(to_session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
       CREATE INDEX IF NOT EXISTS idx_memories_conversation ON memories(conversation_id);
       CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_steps_plan ON project_steps(plan_id);
       CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_project_plans_updated_at ON project_plans(updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+      CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_session_messages_from ON session_messages(from_session_id);
+      CREATE INDEX IF NOT EXISTS idx_session_messages_to ON session_messages(to_session_id);
     `);
   }
 
@@ -405,6 +455,126 @@ class DatabaseService {
 
   getProjectPlanCount(): number {
     return (this.db.prepare('SELECT COUNT(*) AS count FROM project_plans').get() as { count: number }).count;
+  }
+
+  private mapSession(session: SessionRow): Session {
+    return {
+      id: session.id,
+      name: session.name,
+      copilotSessionId: session.copilot_session_id,
+      repoPath: session.repo_path,
+      branch: session.branch ?? undefined,
+      status: session.status,
+      objective: session.objective ?? undefined,
+      lastSummary: session.last_summary ?? undefined,
+      focusLevel: session.focus_level,
+      createdAt: session.created_at,
+      updatedAt: session.updated_at
+    };
+  }
+
+  saveSession(session: Session): void {
+    this.db.prepare(`
+      INSERT INTO sessions (id, name, copilot_session_id, repo_path, branch, status, objective, last_summary, focus_level, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        copilot_session_id = excluded.copilot_session_id,
+        repo_path = excluded.repo_path,
+        branch = excluded.branch,
+        status = excluded.status,
+        objective = excluded.objective,
+        last_summary = excluded.last_summary,
+        focus_level = excluded.focus_level,
+        updated_at = excluded.updated_at
+    `).run(
+      session.id,
+      session.name,
+      session.copilotSessionId,
+      session.repoPath,
+      session.branch ?? null,
+      session.status,
+      session.objective ?? null,
+      session.lastSummary ?? null,
+      session.focusLevel,
+      session.createdAt,
+      session.updatedAt
+    );
+  }
+
+  getSession(id: string): Session | null {
+    const session = this.db
+      .prepare('SELECT * FROM sessions WHERE id = ?')
+      .get(id) as SessionRow | undefined;
+
+    if (!session) {
+      return null;
+    }
+
+    return this.mapSession(session);
+  }
+
+  getAllSessions(): Session[] {
+    const rows = this.db
+      .prepare('SELECT * FROM sessions ORDER BY created_at DESC')
+      .all() as SessionRow[];
+
+    return rows.map((session) => this.mapSession(session));
+  }
+
+  deleteSession(id: string): void {
+    this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+  }
+
+  updateSessionStatus(id: string, status: SessionStatus): void {
+    this.db.prepare('UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?').run(
+      status,
+      Date.now(),
+      id
+    );
+  }
+
+  updateSessionSummary(id: string, summary: string): void {
+    this.db.prepare('UPDATE sessions SET last_summary = ?, updated_at = ? WHERE id = ?').run(
+      summary,
+      Date.now(),
+      id
+    );
+  }
+
+  saveSessionMessage(message: SessionMessage): number {
+    const result = this.db.prepare(`
+      INSERT INTO session_messages (from_session_id, to_session_id, message, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      message.fromSessionId,
+      message.toSessionId,
+      message.message,
+      message.createdAt
+    );
+
+    return result.lastInsertRowid as number;
+  }
+
+  getSessionMessages(sessionId: string, limit: number = 50): SessionMessage[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM session_messages
+      WHERE from_session_id = ? OR to_session_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(sessionId, sessionId, limit) as SessionMessageRow[];
+
+    return rows.map((row) => ({
+      id: row.id,
+      fromSessionId: row.from_session_id,
+      toSessionId: row.to_session_id,
+      message: row.message,
+      createdAt: row.created_at
+    }));
+  }
+
+  getSessionCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS count FROM sessions').get() as { count: number }).count;
   }
 
   close(): void {
