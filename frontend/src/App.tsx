@@ -10,7 +10,6 @@ import { MemoryPanel } from './components/MemoryPanel';
 import { ProjectPlanViewer } from './components/ProjectPlanViewer';
 import { NotificationManager } from './components/Notification';
 import { ParticleBackground } from './components/ParticleBackground';
-import { MultiSessionDashboard } from './components/MultiSessionDashboard';
 import { SessionTabs } from './components/SessionTabs';
 import { SessionMaster } from './components/SessionMaster';
 import { useVoiceRecognition } from './hooks/useVoiceRecognition';
@@ -833,8 +832,28 @@ function App() {
         </motion.div>
       )}
 
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* Session Master */}
+      <SessionMaster
+        sessions={sessions}
+        currentSessionId={activeSessionId}
+        onSwitchSession={setActiveSessionId}
+        onCreateSession={handleCreateSession}
+        isListening={isListening}
+      />
+
+      {/* Main multi-session layout */}
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 min-h-0">
+        {/* Left: Session Tabs + Voice Control */}
         <div className="lg:col-span-1 flex flex-col gap-6">
+          <SessionTabs
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            onSessionSelect={setActiveSessionId}
+            onSessionClose={handleCloseSession}
+            onNewSession={handleCreateSession}
+            compact={false}
+          />
+
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -843,14 +862,14 @@ function App() {
           >
             <div className="flex items-center justify-between w-full mb-6 gap-4">
               <div>
-                <h1 className="text-5xl font-bold neon-text tracking-tight">JARVIS</h1>
-                <p className="text-sm text-white/60 mt-3 leading-relaxed">One control surface for the local voice + Copilot workflow.</p>
+                <h1 className="text-3xl font-bold neon-text tracking-tight">JARVIS</h1>
+                <p className="text-xs text-white/60 mt-2 leading-relaxed">Multi-session controller</p>
               </div>
               <motion.button
                 onClick={() => setShowSettings(true)}
                 whileHover={{ scale: 1.2, rotate: 90 }}
                 whileTap={{ scale: 0.95 }}
-                className="text-white/70 hover:text-neon-cyan transition-colors text-3xl flex-shrink-0"
+                className="text-white/70 hover:text-neon-cyan transition-colors text-2xl flex-shrink-0"
                 title="Settings (Ctrl+,)"
               >
                 ⚙️
@@ -865,7 +884,7 @@ function App() {
               amplitude={0.5}
             />
 
-            <div className="mt-6 w-full">
+            <div className="mt-4 w-full">
               <VoiceStatus
                 state={voiceState}
                 transcript={transcript}
@@ -875,19 +894,19 @@ function App() {
               />
             </div>
 
-            <div className="mt-8 w-full space-y-3">
+            <div className="mt-6 w-full space-y-3">
               <motion.button
                 onClick={handleVoiceCommand}
                 disabled={!isSupported || !isConnected || (isExecuting && !isListening)}
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.98 }}
-                className={`w-full py-4 rounded-xl font-bold text-lg transition-all border-2 ${
+                className={`w-full py-3 rounded-xl font-bold text-sm transition-all border-2 ${
                   isListening
                     ? 'bg-red-500/20 border-red-500 text-red-300 shadow-lg shadow-red-500/40 hover:bg-red-500/30'
                     : 'bg-gradient-to-r from-neon-cyan/20 to-neon-purple/10 border-neon-cyan shadow-lg shadow-neon-cyan/40 hover:from-neon-cyan/30 hover:to-neon-purple/15'
                 } disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none`}
               >
-                {isListening ? '🛑 Stop Listening' : isExecuting ? '⏳ Processing Reply…' : '🎤 Start Voice Command'}
+                {isListening ? '🛑 Stop' : isExecuting ? '⏳ Processing…' : '🎤 Voice'}
               </motion.button>
 
               {isExecuting && (
@@ -897,9 +916,9 @@ function App() {
                   onClick={handleAbort}
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.98 }}
-                  className="w-full py-3 rounded-xl font-bold bg-gradient-to-r from-orange-500/20 to-orange-600/10 border-2 border-orange-500 text-orange-300 hover:from-orange-500/30 hover:to-orange-600/15 transition-all shadow-lg shadow-orange-500/30"
+                  className="w-full py-2 rounded-xl font-bold text-xs bg-gradient-to-r from-orange-500/20 to-orange-600/10 border-2 border-orange-500 text-orange-300 hover:from-orange-500/30 hover:to-orange-600/15 transition-all shadow-lg shadow-orange-500/30"
                 >
-                  ⏹️ Abort Execution
+                  ⏹️ Abort
                 </motion.button>
               )}
             </div>
@@ -908,34 +927,34 @@ function App() {
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="mt-6 w-full glass-panel p-4 border-neon-cyan/20"
+                className="mt-4 w-full glass-panel p-3 border-neon-cyan/20"
               >
-                <p className="text-xs uppercase tracking-widest text-neon-cyan/70 mb-3 font-semibold">Transcript</p>
-                <p className="text-white/85 whitespace-pre-wrap break-words leading-relaxed">
+                <p className="text-xs uppercase tracking-widest text-neon-cyan/70 mb-2 font-semibold">Transcript</p>
+                <p className="text-xs text-white/85 whitespace-pre-wrap break-words leading-relaxed">
                   {transcript}
                   <span className="text-white/40 italic">{interimTranscript}</span>
                 </p>
               </motion.div>
             )}
 
-            <form onSubmit={handleTextSubmit} className="mt-6 w-full space-y-3">
+            <form onSubmit={handleTextSubmit} className="mt-4 w-full space-y-2">
               <motion.input
                 type="text"
                 value={inputText}
                 onChange={(event) => setInputText(event.target.value)}
-                placeholder={isConnected ? 'Type a command for the backend…' : 'Backend offline — type a command to queue your demo idea'}
-                className="w-full px-4 py-3 rounded-lg bg-white/5 border-2 border-white/15 text-white placeholder-white/40 focus:outline-none focus:border-neon-cyan focus:bg-neon-cyan/5 transition-all"
+                placeholder={isConnected ? 'Type a command…' : 'Queue idea...'}
+                className="w-full px-3 py-2 text-xs rounded-lg bg-white/5 border-2 border-white/15 text-white placeholder-white/40 focus:outline-none focus:border-neon-cyan focus:bg-neon-cyan/5 transition-all"
                 whileFocus={{ borderColor: 'rgb(0, 255, 255)' }}
               />
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <motion.button
                   type="submit"
                   disabled={!inputText.trim() || !isConnected || isExecuting}
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.98 }}
-                  className="py-3 rounded-lg bg-gradient-to-r from-neon-cyan/25 to-neon-cyan/10 border-2 border-neon-cyan/50 text-neon-cyan font-semibold hover:from-neon-cyan/35 hover:to-neon-cyan/20 hover:border-neon-cyan transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-neon-cyan/20"
+                  className="py-2 text-xs rounded-lg bg-gradient-to-r from-neon-cyan/25 to-neon-cyan/10 border-2 border-neon-cyan/50 text-neon-cyan font-semibold hover:from-neon-cyan/35 hover:to-neon-cyan/20 hover:border-neon-cyan transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-neon-cyan/20"
                 >
-                  Run command
+                  Run
                 </motion.button>
                 <motion.button
                   type="button"
@@ -943,16 +962,16 @@ function App() {
                   disabled={messages.length === 0}
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.98 }}
-                  className="py-3 rounded-lg border-2 border-white/20 text-white/80 font-semibold hover:text-white hover:border-white/40 hover:bg-white/5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="py-2 text-xs rounded-lg border-2 border-white/20 text-white/80 font-semibold hover:text-white hover:border-white/40 hover:bg-white/5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  Clear history
+                  Clear
                 </motion.button>
               </div>
             </form>
 
-            <div className="mt-6 w-full">
-              <p className="text-xs uppercase tracking-[0.2em] text-white/40 mb-3 font-semibold">Quick prompts</p>
-              <div className="flex flex-wrap gap-2">
+            <div className="mt-4 w-full">
+              <p className="text-xs uppercase tracking-[0.15em] text-white/40 mb-2 font-semibold">Quick prompts</p>
+              <div className="flex flex-wrap gap-1">
                 {emptyStatePrompts.map((prompt, idx) => (
                   <motion.button
                     key={prompt}
@@ -961,11 +980,11 @@ function App() {
                     initial={{ opacity: 0, scale: 0.8 }}
                     animate={{ opacity: 1, scale: 1 }}
                     transition={{ delay: idx * 0.05 }}
-                    whileHover={{ scale: 1.1 }}
+                    whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
-                    className="px-3 py-2 rounded-full text-xs border-2 border-neon-cyan/40 bg-neon-cyan/8 text-neon-cyan/90 hover:border-neon-cyan/70 hover:bg-neon-cyan/15 transition-all shadow-lg shadow-neon-cyan/10"
+                    className="px-2 py-1 text-xs rounded-full border border-neon-cyan/40 bg-neon-cyan/8 text-neon-cyan/90 hover:border-neon-cyan/70 hover:bg-neon-cyan/15 transition-all shadow-lg shadow-neon-cyan/10"
                   >
-                    {prompt}
+                    {prompt.substring(0, 15)}…
                   </motion.button>
                 ))}
               </div>
@@ -975,26 +994,25 @@ function App() {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="mt-4 p-4 w-full bg-red-500/20 border-2 border-red-500/40 rounded-lg"
+                className="mt-4 p-3 w-full bg-red-500/20 border-2 border-red-500/40 rounded-lg"
               >
-                <p className="text-sm text-red-300">
-                  Voice recognition is not supported in this browser. Use the text command box instead.
+                <p className="text-xs text-red-300">
+                  Voice not supported. Use text input.
                 </p>
               </motion.div>
             )}
 
-            <div className="mt-6 text-xs text-white/50 text-center space-y-1 leading-relaxed">
-              <p className="font-semibold text-white/60">Hotkeys: <span className="text-neon-cyan">Ctrl/Cmd+Space</span> (Voice) • <span className="text-neon-cyan">Ctrl/Cmd+,</span> (Settings) • <span className="text-neon-cyan">Esc</span> (Abort)</p>
-              <p>
-                {settings.autoSave
-                  ? '✓ Conversation sync enabled — backend memories stay current.'
-                  : '⚠ Conversation sync disabled — this session stays local-only.'}
+            <div className="mt-4 text-xs text-white/50 text-center space-y-1 leading-relaxed">
+              <p className="font-semibold text-white/60">
+                <span className="text-neon-cyan">Ctrl+Space</span> (Voice) • <span className="text-neon-cyan">Ctrl+,</span> (Settings)
               </p>
             </div>
           </motion.div>
         </div>
 
-        <div className="lg:col-span-2 grid grid-rows-[minmax(0,1fr)_minmax(280px,0.9fr)] gap-6 min-h-0">
+        {/* Right: Content Area */}
+        <div className="lg:col-span-3 grid grid-rows-[minmax(0,1fr)_minmax(240px,0.85fr)] gap-6 min-h-0">
+          {/* Conversation/Memory/Plan Panel */}
           <div className="min-h-0">
             <div className="flex gap-2 mb-4 flex-wrap">
               {['conversation', 'memory', 'plan'].map((view, idx) => (
@@ -1006,7 +1024,7 @@ function App() {
                   transition={{ delay: idx * 0.1 }}
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.98 }}
-                  className={`px-4 py-2 rounded-lg font-bold text-sm transition-all border-2 ${
+                  className={`px-3 py-2 rounded-lg font-bold text-sm transition-all border-2 ${
                     currentView === view
                       ? 'bg-gradient-to-r from-neon-cyan/30 to-neon-purple/10 border-neon-cyan shadow-lg shadow-neon-cyan/30'
                       : 'bg-white/5 border-white/20 text-white/70 hover:bg-white/10 hover:border-white/40'
@@ -1019,7 +1037,7 @@ function App() {
               ))}
             </div>
 
-            <div className="h-[calc(100%-3.5rem)] min-h-[340px]">
+            <div className="h-[calc(100%-3rem)] min-h-[240px]">
               {currentView === 'conversation' && (
                 <ConversationPanel
                   messages={messages}
@@ -1033,6 +1051,7 @@ function App() {
             </div>
           </div>
 
+          {/* Terminal Output */}
           <TerminalOutput
             output={terminalOutput}
             isRunning={isExecuting}

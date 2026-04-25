@@ -27,18 +27,16 @@ export const MultiSessionDashboard: React.FC<MultiSessionDashboardProps> = ({
   onSessionSelect,
   onSessionClose,
   onNewSession,
-  onSettings,
-  onStatusClick,
-  isConnected,
-  isExecuting,
+  onSettings: _onSettings,
+  onStatusClick: _onStatusClick,
+  isConnected: _isConnected,
+  isExecuting: _isExecuting,
   children,
-  voiceOrbElement,
+  voiceOrbElement: _voiceOrbElement,
   compactMode = false,
   showMaster = true,
   showTabs = true
 }) => {
-  const activeSession = sessions.find(s => s.id === activeSessionId);
-  const activeSessions = sessions.filter(s => s.status !== 'idle').length;
 
   return (
     <motion.div
@@ -51,15 +49,11 @@ export const MultiSessionDashboard: React.FC<MultiSessionDashboardProps> = ({
       <AnimatePresence>
         {showMaster && (
           <SessionMaster
-            activeSessionName={activeSession?.name || 'No session'}
-            isConnected={isConnected}
-            isExecuting={isExecuting}
-            totalSessions={sessions.length}
-            activeSessions={activeSessions}
-            onSettings={onSettings}
-            onStatusClick={onStatusClick}
-            voiceOrbElement={voiceOrbElement}
-            compactMode={compactMode}
+            sessions={sessions}
+            currentSessionId={activeSessionId}
+            onSwitchSession={onSessionSelect}
+            onCreateSession={onNewSession}
+            isListening={false}
           />
         )}
       </AnimatePresence>

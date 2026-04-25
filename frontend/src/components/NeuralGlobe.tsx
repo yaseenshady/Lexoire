@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useMemo } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import React, { useRef, useMemo } from 'react';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Preload } from '@react-three/drei';
 import * as THREE from 'three';
 
@@ -285,7 +285,8 @@ const SphereShell: React.FC<{
 const NeuralGlobeContent: React.FC<{
   state: string;
   colors: { primary: number[]; secondary: number[]; dark: number[] };
-}> = ({ state, colors }) => {
+  prefersReducedMotion: boolean;
+}> = ({ state, colors, prefersReducedMotion }) => {
   const { nodes } = useMemo(() => {
     const nodeList: Node[] = [];
     const layers = 3;
@@ -324,7 +325,9 @@ const NeuralGlobeContent: React.FC<{
   useFrame(() => {
     if (!groupRef.current) return;
 
-    const targetSpeed = state === 'thinking' ? 0.0015 : 0.0005;
+    const targetSpeed = prefersReducedMotion 
+      ? 0 
+      : state === 'thinking' ? 0.0015 : 0.0005;
     rotationSpeedRef.current +=
       (targetSpeed - rotationSpeedRef.current) * 0.05;
 
@@ -355,6 +358,7 @@ const NeuralGlobe: React.FC<NeuralGlobeProps> = ({
   className = '',
 }) => {
   const colors = accentColorMap[accentColor];
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   return (
     <div
@@ -392,7 +396,7 @@ const NeuralGlobe: React.FC<NeuralGlobeProps> = ({
           distance={500}
         />
 
-        <NeuralGlobeContent state={state} colors={colors} />
+        <NeuralGlobeContent state={state} colors={colors} prefersReducedMotion={prefersReducedMotion} />
         <EffectsLayer />
 
         <OrbitControls
