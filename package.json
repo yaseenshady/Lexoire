@@ -8,13 +8,17 @@
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:backend": "npm --prefix backend run dev",
     "build": "npm --prefix frontend run build && npm --prefix backend run build",
+    "backend:rebuild:electron": "electron-rebuild --version 41.3.0 --module-dir backend --force --only better-sqlite3",
     "start": "npm --prefix backend run start",
     "electron": "electron electron/main.js",
     "electron:dev": "npm run build && npm run electron",
     "electron:build": "npm run build && electron-builder build --publish never",
     "electron:build:mac": "npm run build && electron-builder build --mac --publish never",
     "electron:build:win": "npm run build && electron-builder build --win --publish never",
-    "electron:pack": "electron-builder --dir",
+    "electron:build:linux": "npm run build && electron-builder build --linux --publish never",
+    "electron:build:all": "npm run build && electron-builder build --mac --win --linux --publish never",
+    "electron:pack": "npm run build && npm run backend:rebuild:electron && electron-builder --dir --publish never",
+    "electron:pack:local": "npm run build && npm run backend:rebuild:electron && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir --publish never --config.mac.identity=null",
     "electron:dist": "npm run build && electron-builder"
   },
   "keywords": [
@@ -34,9 +38,17 @@
     "artifactName": "JARVIS-${version}-${os}-${arch}.${ext}",
     "files": [
       "electron/**/*",
+      "swift/JarvisSpeech",
       "backend/dist/**/*",
+      "backend/package.json",
+      "backend/node_modules/**/*",
       "frontend/dist/**/*",
       "node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "swift/JarvisSpeech",
+      "backend/node_modules/**/*.node",
+      "node_modules/**/*.node"
     ],
     "directories": {
       "buildResources": "electron/assets"
@@ -47,7 +59,12 @@
         "zip"
       ],
       "icon": "electron/assets/icon.png",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSSpeechRecognitionUsageDescription": "JARVIS needs speech recognition access to transcribe your voice commands.",
+        "NSMicrophoneUsageDescription": "JARVIS needs microphone access to listen for your voice commands.",
+        "NSAudioCaptureUsageDescription": "JARVIS needs audio capture access to process your voice commands."
+      }
     },
     "win": {
       "target": [
@@ -56,9 +73,22 @@
       ],
       "icon": "electron/assets/icon.png"
     },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "electron/assets/icon.png",
+      "category": "Development",
+      "maintainer": "yshady <yshady@users.noreply.github.com>"
+    },
     "nsis": {
+      "artifactName": "JARVIS-${version}-${os}-${arch}-setup.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "JARVIS-${version}-${os}-${arch}-portable.${ext}"
     }
   },
   "devDependencies": {

@@ -98,7 +98,6 @@ class SessionManager {
 
   deleteSession(id: string): void {
     this.db.deleteSession(id);
-    this.persistence.logHistory(id, 'deleted');
   }
 
   getSessionCount(): number {

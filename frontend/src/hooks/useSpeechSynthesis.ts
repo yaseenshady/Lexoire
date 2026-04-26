@@ -78,7 +78,7 @@ export const useSpeechSynthesis = ({
   enabled,
   lang,
   voiceStyle = 'natural',
-  rate = 0.92,
+  rate = 1.0,
   fallbackEndpoint
 }: SpeechSynthesisOptions) => {
   const [hasBrowserSupport, setHasBrowserSupport] = useState(false);
@@ -129,7 +129,8 @@ export const useSpeechSynthesis = ({
           const utterance = new SpeechSynthesisUtterance(spokenText);
           utterance.lang = lang;
           utterance.rate = rate;
-          utterance.pitch = 1;
+          utterance.pitch = 1.1;
+          utterance.volume = 1;
 
           if (selectedVoice) {
             utterance.voice = selectedVoice;
@@ -160,7 +161,7 @@ export const useSpeechSynthesis = ({
               text: spokenText,
               lang,
               voice: fallbackVoice,
-              rate: Math.round(185 * rate)
+              rate: Math.round(200 * rate)
             })
           });
         } finally {

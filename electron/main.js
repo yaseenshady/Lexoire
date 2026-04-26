@@ -1,221 +1,450 @@
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, session, systemPreferences, ipcMain } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
-const net = require('net');
+const http = require('http');
+const { spawn, exec, execFileSync, spawnSync } = require('child_process');
+
+// Suppress EPIPE crashes (happens when terminal pipe closes while backend logs)
+process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') throw err; });
+app.commandLine.appendSwitch('disable-http-cache');
+
+const JARVIS_PORT = 7337;
 
 let mainWindow;
 let backendProcess;
-let backendPort = 5000;
-let backendReady = false;
 
-// Determine if running from packaged app or development
-const isDev = !app.isPackaged;
-const resourcesPath = isDev
-  ? path.join(__dirname, '..')
-  : path.join(process.resourcesPath, 'app');
+const resourcesPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'app.asar')
+  : path.join(__dirname, '..');
 
-function checkPortAvailable(port) {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.once('error', () => resolve(false));
-    server.once('listening', () => {
-      server.close();
-      resolve(true);
-    });
-    server.listen(port);
+function waitForBackend(port, maxWaitMs = 15000) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+
+    const retry = (message) => {
+      if (Date.now() - start < maxWaitMs) {
+        setTimeout(attempt, 400);
+        return;
+      }
+
+      reject(new Error(message));
+    };
+
+    const attempt = () => {
+      const req = http.get({
+        host: '127.0.0.1',
+        port,
+        path: '/api/health',
+        timeout: 1000,
+      }, (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            retry(`Backend health probe returned ${res.statusCode}`);
+            return;
+          }
+
+          try {
+            const payload = JSON.parse(body);
+            if (payload?.status === 'ok') {
+              resolve();
+              return;
+            }
+          } catch (_) {}
+
+          retry('Backend health probe did not return a valid JARVIS response');
+        });
+      });
+
+      req.on('error', () => retry('Backend not ready after ' + maxWaitMs + 'ms'));
+      req.on('timeout', () => {
+        req.destroy();
+        retry('Backend timeout');
+      });
+    };
+    setTimeout(attempt, 500);
   });
 }
 
-async function findAvailablePort(startPort = 5000) {
-  for (let port = startPort; port < startPort + 100; port++) {
-    if (await checkPortAvailable(port)) {
-      return port;
-    }
+function listListeningPids(port) {
+  try {
+    const output = execFileSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' });
+    return output
+      .split('\n')
+      .map((value) => Number.parseInt(value.trim(), 10))
+      .filter((value) => Number.isInteger(value));
+  } catch (_) {
+    return [];
   }
-  throw new Error('No available ports found');
+}
+
+function getProcessCommand(pid) {
+  try {
+    return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim();
+  } catch (_) {
+    return '';
+  }
+}
+
+function cleanupStaleBackend(port) {
+  const pids = listListeningPids(port);
+
+  for (const pid of pids) {
+    if (!pid || pid === process.pid) continue;
+    const command = getProcessCommand(pid);
+    const isJarvisBackend =
+      command.includes('backend/dist/server.js') ||
+      command.includes(' dist/server.js') ||
+      (command.includes('JARVIS.app') && command.includes('server.js'));
+    if (!isJarvisBackend) continue;
+    console.log('Stopping stale JARVIS backend on port', port, 'pid', pid);
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch (_) {}
+  }
+
+  if (pids.length > 0) {
+    spawnSync('sleep', ['1']);
+  }
+}
+
+function getBackendRuntime() {
+  const env = {
+    ...process.env,
+    PORT: String(JARVIS_PORT),
+    JARVIS_STRICT_PORT: '1',
+    NODE_ENV: 'production',
+    DB_PATH: app.isPackaged
+      ? path.join(app.getPath('userData'), 'jarvis.db')
+      : (process.env.DB_PATH || ''),
+  };
+
+  if (process.versions?.electron) {
+    return {
+      command: process.execPath,
+      args: [],
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+    };
+  }
+
+  return {
+    command: process.execPath,
+    args: [],
+    env,
+  };
 }
 
 function startBackend() {
-  return new Promise((resolve, reject) => {
-    findAvailablePort(backendPort)
-      .then((port) => {
-        backendPort = port;
-        const backendPath = isDev
-          ? path.join(resourcesPath, 'backend', 'dist', 'server.js')
-          : path.join(resourcesPath, 'backend', 'dist', 'server.js');
+  const backendPath = path.join(resourcesPath, 'backend', 'dist', 'server.js');
+  const backendCwd = app.isPackaged ? app.getPath('userData') : path.join(resourcesPath, 'backend');
+  const runtime = getBackendRuntime();
+  cleanupStaleBackend(JARVIS_PORT);
+  console.log('Starting backend:', backendPath, 'on port', JARVIS_PORT);
 
-        const env = {
-          ...process.env,
-          PORT: backendPort.toString(),
-          NODE_ENV: isDev ? 'development' : 'production',
-        };
-
-        console.log(`Starting backend on port ${backendPort}`);
-        console.log(`Backend path: ${backendPath}`);
-
-        backendProcess = spawn('node', [backendPath], {
-          env,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
-
-        backendProcess.stdout.on('data', (data) => {
-          console.log(`[Backend] ${data}`);
-        });
-
-        backendProcess.stderr.on('data', (data) => {
-          console.error(`[Backend Error] ${data}`);
-        });
-
-        backendProcess.on('error', (err) => {
-          console.error('Failed to start backend:', err);
-          reject(err);
-        });
-
-        // Wait a bit for backend to start, then check if it's listening
-        setTimeout(() => {
-          const client = net.createConnection(backendPort, '127.0.0.1');
-          client.on('connect', () => {
-            client.destroy();
-            backendReady = true;
-            console.log('Backend is ready');
-            resolve();
-          });
-          client.on('error', () => {
-            // Backend might still be starting, retry
-            const retryClient = net.createConnection(backendPort, '127.0.0.1');
-            retryClient.on('connect', () => {
-              retryClient.destroy();
-              backendReady = true;
-              console.log('Backend is ready');
-              resolve();
-            });
-            retryClient.on('error', () => {
-              console.error('Backend is not responding');
-              reject(new Error('Backend failed to start'));
-            });
-          });
-        }, 1000);
-      })
-      .catch(reject);
+  backendProcess = spawn(runtime.command, [...runtime.args, backendPath], {
+    env: runtime.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: backendCwd,
   });
+
+  const safeLog = (...args) => { try { console.log(...args); } catch (_) {} };
+  const safeErr = (...args) => { try { console.error(...args); } catch (_) {} };
+  backendProcess.stdout.on('data', (d) => safeLog('[B]', d.toString().trim()));
+  backendProcess.stderr.on('data', (d) => safeErr('[BE]', d.toString().trim()));
+  backendProcess.on('error', (err) => safeErr('Backend error:', err));
+  backendProcess.on('exit', (code) => safeLog('Backend exited:', code));
+  process.stdout.on('error', (err) => { if (err.code !== 'EPIPE') throw err; });
+  process.stderr.on('error', (err) => { if (err.code !== 'EPIPE') throw err; });
+
+  return waitForBackend(JARVIS_PORT);
 }
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
+function createWindow(initialUrl) {
+  const windowOptions = {
     width: 1400,
     height: 900,
+    minWidth: 900,
+    minHeight: 600,
+    backgroundColor: '#060808',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      enableRemoteModule: false,
+      webSecurity: false,
+      preload: path.join(__dirname, 'preload.js'),
     },
     icon: path.join(__dirname, 'assets', 'icon.png'),
-  });
+    title: 'JARVIS',
+    show: false,
+  };
 
-  // In production, load from backend URL. In dev, try Vite dev server first.
-  let frontendUrl;
-  if (isDev) {
-    frontendUrl = `http://localhost:${backendPort}`;
-  } else {
-    frontendUrl = `http://localhost:${backendPort}`;
+  if (process.platform === 'darwin') {
+    windowOptions.titleBarStyle = 'hiddenInset';
   }
 
-  console.log(`Loading frontend from: ${frontendUrl}`);
-  mainWindow.loadURL(frontendUrl);
-
-  if (isDev) {
-    mainWindow.webContents.openDevTools();
-  }
-
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+  mainWindow = new BrowserWindow({
+    ...windowOptions,
   });
 
-  // Create application menu
-  createMenu();
-}
+  mainWindow.once('ready-to-show', () => mainWindow.show());
 
-function createMenu() {
-  const template = [
+  const url = initialUrl || ('http://127.0.0.1:' + JARVIS_PORT);
+  console.log('Loading:', url);
+  mainWindow.loadURL(url);
+
+  if (!initialUrl) {
+    mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
+      console.error('Load failed:', code, desc);
+      setTimeout(() => mainWindow && mainWindow.loadURL(url), 2000);
+    });
+  }
+
+  mainWindow.on('closed', () => { mainWindow = null; });
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
-      label: 'File',
+      label: 'JARVIS',
       submenu: [
-        {
-          label: 'Exit',
-          accelerator: 'CmdOrCtrl+Q',
-          click: () => {
-            app.quit();
-          },
-        },
-      ],
-    },
-    {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
+        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => mainWindow && mainWindow.reload() },
         { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
+        { label: 'Quit JARVIS', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
       ],
     },
     {
       label: 'View',
       submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
         { role: 'toggleDevTools' },
-        { type: 'separator' },
+        { role: 'togglefullscreen' },
         { role: 'resetZoom' },
         { role: 'zoomIn' },
         { role: 'zoomOut' },
       ],
     },
-    {
-      label: 'Help',
-      submenu: [
-        {
-          label: 'About JARVIS',
-          click: () => {
-            console.log('JARVIS Voice Automation v1.0.0');
-          },
-        },
-      ],
-    },
-  ];
-
-  const menu = Menu.buildFromTemplate(template);
-  Menu.setApplicationMenu(menu);
+  ]));
 }
 
-app.on('ready', async () => {
+// ── TTS fallback queue ───────────────────────────────────────────────────────
+let sayProcess = null;
+const sayQueue = [];
+let activeUtterance = null;
+let stoppingSpeech = false;
+
+function pickVoice(mode = 'hifi') {
+  if (process.platform !== 'darwin') return null;
+  const envVoice = process.env.JARVIS_VOICE?.trim();
+  const preferred = envVoice
+    ? [envVoice]
+    : mode === 'classic'
+      ? ['Fred', 'Ralph', 'Albert']
+      : ['Eddy (English (US))', 'Reed (English (US))', 'Flo (English (US))', 'Samantha', 'Ava', 'Allison'];
   try {
-    // Always start the backend in Electron app
+    const installed = execFileSync('say', ['-v', '?'], { encoding: 'utf8' });
+    for (const name of preferred) {
+      if (installed.includes(`${name} `)) return name;
+    }
+  } catch (_) {}
+  return mode === 'classic' ? 'Fred' : 'Eddy (English (US))';
+}
+
+function speakNextQueuedUtterance() {
+  const next = sayQueue.shift();
+  if (!next) {
+    sayProcess = null;
+    activeUtterance = null;
+    return;
+  }
+
+  activeUtterance = next;
+  stoppingSpeech = false;
+  const voice = pickVoice(next.mode);
+  if (!voice) {
+    activeUtterance = null;
+    next.resolve(false);
+    speakNextQueuedUtterance();
+    return;
+  }
+
+  const rate = next.mode === 'classic' ? '150' : '168';
+  sayProcess = spawn('say', ['-v', voice, '-r', rate, next.text], { stdio: 'ignore' });
+  sayProcess.once('error', (error) => {
+    sayProcess = null;
+    const current = activeUtterance;
+    activeUtterance = null;
+    current?.reject(error);
+    speakNextQueuedUtterance();
+  });
+  sayProcess.once('exit', (code) => {
+    sayProcess = null;
+    const current = activeUtterance;
+    const aborted = stoppingSpeech;
+    activeUtterance = null;
+    stoppingSpeech = false;
+    if (aborted || code === 0 || code === null) {
+      current?.resolve(!aborted);
+    } else {
+      current?.reject(new Error(`say exited with code ${code}`));
+    }
+    speakNextQueuedUtterance();
+  });
+}
+
+ipcMain.handle('tts:speak', async (_, payload) => {
+  const text = typeof payload === 'object' && payload !== null ? payload.text : payload;
+  const mode = typeof payload === 'object' && payload !== null && payload.mode === 'classic' ? 'classic' : 'hifi';
+  const clean = String(text).replace(/["`$\\]/g, ' ').trim().substring(0, 400);
+  if (!clean) return false;
+  return new Promise((resolve, reject) => {
+    sayQueue.push({ text: clean, mode, resolve, reject });
+    if (!sayProcess && !activeUtterance) speakNextQueuedUtterance();
+  });
+});
+
+ipcMain.handle('tts:stop', async () => {
+  while (sayQueue.length > 0) {
+    const queued = sayQueue.shift();
+    queued?.resolve(false);
+  }
+  if (sayProcess) {
+    stoppingSpeech = true;
+    try { sayProcess.kill('SIGTERM'); } catch (_) {}
+  }
+});
+
+ipcMain.handle('mic:request', async () => {
+  if (process.platform !== 'darwin') return true;
+  return systemPreferences.askForMediaAccess('microphone');
+});
+
+// ── Native speech recognition via Swift SFSpeechRecognizer ───────────────
+let speechProcess = null;
+let speechEnabled = false;
+
+function getSpeechBinaryPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'app.asar.unpacked', 'swift', 'JarvisSpeech');
+  }
+
+  return path.join(__dirname, '..', 'swift', 'JarvisSpeech');
+}
+
+function startSpeechProcess() {
+  if (process.platform !== 'darwin') {
+    mainWindow?.webContents.send('speech:event', {
+      type: 'error',
+      text: 'Native speech recognition is currently available on macOS only.',
+    });
+    return;
+  }
+
+  if (speechProcess) return;
+  try {
+    const speechBinaryPath = getSpeechBinaryPath();
+    speechProcess = spawn(speechBinaryPath, [], { stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    console.warn('[Speech] Failed to start:', e.message);
+    mainWindow?.webContents.send('speech:event', {
+      type: 'error',
+      text: `Failed to start native speech recognition: ${e.message}`,
+    });
+    return;
+  }
+  let buf = '';
+  speechProcess.stdout.on('data', (data) => {
+    buf += data.toString();
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t) continue;
+      if (t === 'JARVIS_READY') {
+        mainWindow?.webContents.send('speech:event', { type: 'ready' });
+      } else if (t.startsWith('JARVIS_INTERIM:')) {
+        mainWindow?.webContents.send('speech:event', { type: 'interim', text: t.slice(15) });
+      } else if (t.startsWith('JARVIS_FINAL:')) {
+        mainWindow?.webContents.send('speech:event', { type: 'final', text: t.slice(13) });
+      } else if (t.startsWith('JARVIS_ERROR:')) {
+        const errorText = t.slice(13);
+        if (/denied|notDetermined|restricted|permission|privacy/i.test(errorText)) {
+          speechEnabled = false;
+        }
+        mainWindow?.webContents.send('speech:event', { type: 'error', text: errorText });
+      }
+    }
+  });
+  speechProcess.stderr.on('data', (d) => console.warn('[Speech]', d.toString().trim()));
+  speechProcess.on('error', (error) => {
+    speechProcess = null;
+    mainWindow?.webContents.send('speech:event', {
+      type: 'error',
+      text: `Failed to start native speech recognition: ${error.message}`,
+    });
+  });
+  speechProcess.on('exit', (code) => {
+    speechProcess = null;
+    if (speechEnabled) setTimeout(() => { if (speechEnabled) startSpeechProcess(); }, 1200);
+  });
+}
+
+ipcMain.handle('speech:start', () => {
+  speechEnabled = true;
+  startSpeechProcess();
+});
+
+ipcMain.handle('speech:stop', () => {
+  speechEnabled = false;
+  if (speechProcess) { try { speechProcess.kill(); } catch (_) {} speechProcess = null; }
+});
+
+app.on('ready', async () => {
+  // Grant microphone permission unconditionally (local app, trusted)
+  if (process.platform === 'darwin') {
+    try {
+      await systemPreferences.askForMediaAccess('microphone');
+    } catch (e) {
+      console.warn('Mic access request failed (non-fatal):', e.message);
+    }
+  }
+
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    const allowed = ['media', 'microphone', 'audioCapture', 'clipboard-sanitized-write'];
+    callback(allowed.includes(permission));
+  });
+
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    const allowed = ['media', 'microphone', 'audioCapture'];
+    return allowed.includes(permission);
+  });
+
+  try {
+    await session.defaultSession.clearCache();
     await startBackend();
+    console.log('Backend ready');
     createWindow();
   } catch (err) {
-    console.error('Failed to start app:', err);
-    app.quit();
+    console.error('Backend warning:', err.message);
+    createWindow(`data:text/html;charset=utf-8,${encodeURIComponent(`
+      <html><body style="margin:0;background:#050807;color:#d4ffe0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh">
+        <div style="max-width:560px;padding:32px;border:1px solid rgba(16,255,80,.2);border-radius:18px;background:rgba(6,18,10,.88);box-shadow:0 20px 60px rgba(0,0,0,.35)">
+          <h1 style="margin:0 0 12px;font-size:28px;color:#10ff50">JARVIS backend unavailable</h1>
+          <p style="margin:0 0 10px;line-height:1.5">The local backend could not claim port ${JARVIS_PORT}, so voice commands and Copilot orchestration are unavailable.</p>
+          <pre style="white-space:pre-wrap;color:#9fe7b0;background:#031108;padding:12px;border-radius:10px">${String(err.message || err)}</pre>
+        </div>
+      </body></html>
+    `)}`);
   }
 });
 
 app.on('window-all-closed', () => {
-  // Clean up backend process
-  if (backendProcess) {
-    backendProcess.kill();
-  }
+  if (backendProcess) backendProcess.kill();
   app.quit();
 });
 
 app.on('activate', () => {
-  if (mainWindow === null) {
-    createWindow();
+  if (mainWindow) {
+    mainWindow.show();
+    mainWindow.focus();
+  } else {
+    // Backend is already running; just open the window
+    createWindow('http://127.0.0.1:' + JARVIS_PORT);
   }
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught exception:', err);
 });

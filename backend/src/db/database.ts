@@ -230,6 +230,17 @@ class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_session_context_share_to ON session_context_share(to_session_id);
       CREATE INDEX IF NOT EXISTS idx_session_context_share_created_at ON session_context_share(created_at DESC);
     `);
+
+    this.ensureColumn('messages', 'metadata', 'TEXT');
+    this.ensureColumn('sessions', 'metadata', 'TEXT');
+  }
+
+  private ensureColumn(table: string, column: string, definition: string) {
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    const hasColumn = rows.some((row) => row.name === column);
+    if (!hasColumn) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 
   private parseMetadata(metadata: string | null): Record<string, unknown> | undefined {
@@ -593,6 +604,17 @@ class DatabaseService {
   }
 
   deleteSession(id: string): void {
+    const deleteSession = this.db.transaction((sessionId: string) => {
+      this.db.prepare('DELETE FROM session_context_share WHERE from_session_id = ? OR to_session_id = ?').run(sessionId, sessionId);
+      this.db.prepare('DELETE FROM session_messages WHERE from_session_id = ? OR to_session_id = ?').run(sessionId, sessionId);
+      this.db.prepare('DELETE FROM session_history WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM session_archive WHERE id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+    });
+    deleteSession(id);
+  }
+
+  closeSessionRecordOnly(id: string): void {
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
   }
 

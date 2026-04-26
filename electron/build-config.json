@@ -5,10 +5,18 @@
     "artifactName": "JARVIS-${version}-${os}-${arch}.${ext}",
     "files": [
       "electron/**/*",
+      "swift/JarvisSpeech",
       "backend/dist/**/*",
+      "backend/package.json",
+      "backend/node_modules/**/*",
       "frontend/dist/**/*",
       "node_modules/**/*",
       "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme,LICENSE,license,LIC}"
+    ],
+    "asarUnpack": [
+      "swift/JarvisSpeech",
+      "backend/node_modules/**/*.node",
+      "node_modules/**/*.node"
     ],
     "directories": {
       "buildResources": "electron/assets"
@@ -19,7 +27,12 @@
         "zip"
       ],
       "icon": "electron/assets/icon.png",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSSpeechRecognitionUsageDescription": "JARVIS needs speech recognition access to transcribe your voice commands.",
+        "NSMicrophoneUsageDescription": "JARVIS needs microphone access to listen for your voice commands.",
+        "NSAudioCaptureUsageDescription": "JARVIS needs audio capture access to process your voice commands."
+      }
     },
     "win": {
       "target": [
@@ -28,9 +41,22 @@
       ],
       "icon": "electron/assets/icon.png"
     },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "electron/assets/icon.png",
+      "category": "Development",
+      "maintainer": "yshady <yshady@users.noreply.github.com>"
+    },
     "nsis": {
+      "artifactName": "JARVIS-${version}-${os}-${arch}-setup.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "JARVIS-${version}-${os}-${arch}-portable.${ext}"
     }
   }
 }

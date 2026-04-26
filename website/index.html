@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JARVIS | Voice-first orchestration for Copilot sessions</title>
+  <meta
+    name="description"
+    content="JARVIS is an open source, local-first control room for voice-driven Copilot sessions, durable AI workflows, and developer collaboration."
+  />
+  <link rel="icon" href="./icon.png" />
+  <link rel="stylesheet" href="./assets/styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <nav class="site-nav" data-site-nav>
+      <div class="container site-nav__inner">
+        <a class="brand" href="./index.html" aria-label="JARVIS home">
+          <span class="brand__mark">J</span>
+          <span>
+            <span class="brand__name">JARVIS</span>
+            <span class="brand__meta">Open source AI orchestration</span>
+          </span>
+        </a>
+
+        <button class="nav-toggle" type="button" data-nav-toggle aria-label="Toggle navigation">
+          Menu
+        </button>
+
+        <div class="site-nav__menu">
+          <div class="site-nav__links">
+            <a href="#journey">Journey</a>
+            <a href="#architecture">Architecture</a>
+            <a href="./developer-docs.html">Developer docs</a>
+          </div>
+          <div class="nav-actions">
+            <a class="button button--ghost" href="https://github.com/yshady/jarvis" target="_blank" rel="noreferrer">GitHub</a>
+            <a class="button button--primary" href="./developer-docs.html">Read the docs</a>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <div class="container hero__grid">
+        <section class="hero__copy hero__panel">
+          <span class="eyebrow">Voice-first orchestration</span>
+          <h1>A simple top-down journey from voice to result.</h1>
+          <p>
+            JARVIS keeps the workflow readable: speak, route, process, and persist. The landing page now mirrors that flow
+            with a green terminal aesthetic and a cleaner story.
+          </p>
+          <div class="hero__actions">
+            <a class="button button--primary" href="./developer-docs.html">Open developer docs</a>
+            <a class="button button--ghost" href="https://github.com/yshady/jarvis" target="_blank" rel="noreferrer">GitHub</a>
+          </div>
+          <div class="hero__meta">
+            <span class="pill">Local-first sessions</span>
+            <span class="pill">Cross-system voice</span>
+            <span class="pill">Green terminal theme</span>
+          </div>
+        </section>
+
+        <aside class="hero__panel hero-art">
+          <div class="hero-orb hero-orb--one"></div>
+          <div class="hero-orb hero-orb--two"></div>
+          <div class="hero-art__frame">
+            <div class="hero-art__glow"></div>
+            <div class="hero-terminal">
+              <div class="hero-terminal__bar">
+                <span></span><span></span><span></span>
+              </div>
+              <div class="hero-terminal__body">
+                <p>&gt; speak "send the update"</p>
+                <p>&gt; route to active session</p>
+                <p>&gt; stream response live</p>
+                <p>&gt; persist context centrally</p>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </header>
+
+    <main>
+      <section class="section" id="journey">
+        <div class="container">
+          <div class="section-heading">
+            <h2>Top-down journey</h2>
+            <p>One clean path from intent to output. Each step stays visible so you can tell where the work is.</p>
+          </div>
+
+          <div class="journey-stack">
+            <article class="journey-card">
+              <span class="journey-card__step">01</span>
+              <div>
+                <h3>Speak</h3>
+                <p>Voice enters the system and becomes a visible task instead of disappearing into the background.</p>
+              </div>
+            </article>
+            <article class="journey-card">
+              <span class="journey-card__step">02</span>
+              <div>
+                <h3>Route</h3>
+                <p>The active session, provider, and context are picked up together so the next action stays aligned.</p>
+              </div>
+            </article>
+            <article class="journey-card">
+              <span class="journey-card__step">03</span>
+              <div>
+                <h3>Process</h3>
+                <p>Backend progress stays visible while the response streams, so you know it is still working.</p>
+              </div>
+            </article>
+            <article class="journey-card">
+              <span class="journey-card__step">04</span>
+              <div>
+                <h3>Persist</h3>
+                <p>Sessions, markdown context, and handoffs are stored centrally for the next turn or provider swap.</p>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="architecture">
+        <div class="container">
+          <div class="section-heading">
+            <h2>Why it feels stable</h2>
+            <p>The design is intentionally narrow: fewer states, clearer feedback, and a stronger visual hierarchy.</p>
+          </div>
+
+          <div class="architecture">
+            <article class="card">
+              <ul class="stack-list stack-list--compact">
+                <li>
+                  <strong>Visible state</strong>
+                  <span>Listening, speaking, and processing all read as separate moments.</span>
+                </li>
+                <li>
+                  <strong>Shared context</strong>
+                  <span>Central markdown holds the session story across providers.</span>
+                </li>
+                <li>
+                  <strong>Fancy graphics</strong>
+                  <span>Green glows, terminals, and depth cues keep the landing page premium but simple.</span>
+                </li>
+              </ul>
+            </article>
+
+            <div class="grid">
+              <article class="callout">
+                <h3>What the page should communicate</h3>
+                <p>Speak first. Show the journey. Keep the graphics polished. Make the system feel controlled, not crowded.</p>
+              </article>
+
+              <article class="callout">
+                <h3>Suggested visual direction</h3>
+                <p>Use layered green gradients, a subtle grid, animated terminal cards, and one strong hero focal point.</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="container">
+          <div class="section-heading">
+            <h2>Open source, not hidden</h2>
+            <p>Developer docs stay one click away, but the landing page itself stays focused on the product story.</p>
+          </div>
+
+          <div class="docs-preview">
+            <aside class="docs-preview__sidebar">
+              <details open>
+                <summary>Start here</summary>
+                <ul>
+                  <li>Landing page overview</li>
+                  <li>Top-down journey</li>
+                  <li>Visual direction</li>
+                </ul>
+              </details>
+              <details open>
+                <summary>Docs</summary>
+                <ul>
+                  <li>Project overview</li>
+                  <li>Local setup</li>
+                  <li>Build and run</li>
+                </ul>
+              </details>
+              <details>
+                <summary>Runtime flows</summary>
+                <ul>
+                  <li>Voice routing</li>
+                  <li>Session lifecycle</li>
+                  <li>Copilot integration</li>
+                </ul>
+              </details>
+            </aside>
+
+            <div class="docs-preview__body">
+              <article class="doc-card">
+                <span class="eyebrow">Simple story</span>
+                <h3>Understand the product instantly</h3>
+                <p>A cleaner landing page makes the UI feel deliberate instead of overloaded.</p>
+              </article>
+              <article class="doc-card">
+                <span class="eyebrow">Fancy graphics</span>
+                <h3>Keep the visual energy high</h3>
+                <p>Green terminal glow, soft depth, and a strong focal graphic are enough to carry the page.</p>
+              </article>
+              <a class="button button--primary" href="./developer-docs.html">Go to developer docs</a>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container">
+        <div class="site-footer__panel">
+          <div>
+            <strong>JARVIS documentation site</strong>
+            <p>Green terminal landing page with a simple top-down story.</p>
+          </div>
+          <div class="site-footer__links">
+            <a href="./developer-docs.html">Developer docs</a>
+            <a href="https://github.com/yshady/jarvis" target="_blank" rel="noreferrer">Repository</a>
+            <a href="./index.html">Home</a>
+          </div>
+          <p>© <span data-current-year></span> JARVIS</p>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script src="./assets/site.js"></script>
+</body>
+</html>

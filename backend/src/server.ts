@@ -1,5 +1,5 @@
 import express from 'express';
-import { execFile, spawnSync } from 'child_process';
+import { execFile, spawn, spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
@@ -7,12 +7,16 @@ import path from 'path';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { ElevenLabsClient } from 'elevenlabs';
 import DatabaseService from './db/database';
 import CopilotService from './copilot/copilot-service';
+import ClaudeService from './services/claude-service';
+import CodexService from './services/codex-service';
 import AcademicPptService from './services/academic-ppt-service';
 import SessionManager from './services/session-manager';
 import SessionMessaging from './services/session-messaging';
 import logger from './services/logger';
+import { appendSessionProgress, buildProviderPrompt, ensureSessionContext } from './services/session-context-md';
 import type {
   AppState,
   Conversation,
@@ -26,6 +30,14 @@ import type {
 } from './types';
 
 dotenv.config();
+
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY?.trim() || '';
+// Default: ElevenLabs "Adam" premade voice (deep, clear AI-assistant voice)
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID?.trim() || 'pNInz6obpgDQGcFmaJgB';
+const ELEVENLABS_MODEL = process.env.ELEVENLABS_MODEL?.trim() || 'eleven_turbo_v2_5';
+const elevenLabsClient = ELEVENLABS_API_KEY
+  ? new ElevenLabsClient({ apiKey: ELEVENLABS_API_KEY })
+  : null;
 
 const STARTED_AT = Date.now();
 const DEFAULT_PORT = 5000;
@@ -46,6 +58,7 @@ type InstalledVoice = {
 };
 
 const PORT = Number.parseInt(process.env.PORT || `${DEFAULT_PORT}`, 10);
+const STRICT_PORT = process.env.JARVIS_STRICT_PORT === '1';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN?.trim() || DEFAULT_FRONTEND_ORIGIN;
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../jarvis.db');
 
@@ -82,6 +95,8 @@ app.use(express.json());
 
 const db = new DatabaseService(DB_PATH);
 const copilotService = new CopilotService();
+const claudeService = new ClaudeService();
+const codexService = new CodexService();
 const sessionManager = new SessionManager(db);
 const sessionMessaging = new SessionMessaging(db);
 
@@ -259,9 +274,11 @@ function buildRuntimeSummary(): RuntimeSummary {
   return {
     startedAt: STARTED_AT,
     databasePath: DB_PATH,
+    workingDirectory: process.cwd(),
     copilotCommand: copilotStatus.command,
     copilotAvailable: copilotStatus.available,
     copilotVersion: copilotStatus.version,
+    sessionId: copilotStatus.sessionId,
     frontendOrigin: FRONTEND_ORIGIN,
     academicPptBaseUrl: academicPptStatus.baseUrl,
     conversationCount: db.getConversationCount(),
@@ -376,7 +393,23 @@ function completeExecutionPlan(plan: ProjectPlan, response: CopilotResponse, upd
   };
 }
 
-function speakWithSystemVoice(
+function speakWithElevenLabs(text: string): Promise<void> {
+  if (!elevenLabsClient) return Promise.reject(new Error('ElevenLabs not configured'));
+
+  return elevenLabsClient.textToSpeech.convertAsStream(ELEVENLABS_VOICE_ID, {
+    text,
+    model_id: ELEVENLABS_MODEL,
+    output_format: 'mp3_44100_128',
+  }).then((audioStream) => new Promise<void>((resolve, reject) => {
+    const afplay = spawn('afplay', ['-']);
+    afplay.on('close', () => resolve());
+    afplay.on('error', reject);
+    audioStream.pipe(afplay.stdin!);
+    audioStream.on('error', reject);
+  }));
+}
+
+async function speakWithSystemVoice(
   text: string,
   lang?: string,
   requestedVoice?: string,
@@ -389,9 +422,17 @@ function speakWithSystemVoice(
     return Promise.resolve();
   }
 
+  if (elevenLabsClient) {
+    try {
+      await speakWithElevenLabs(message);
+      return;
+    } catch (err: unknown) {
+      logger.warning('ElevenLabs TTS failed, falling back to macOS say:', getErrorMessage(err));
+    }
+  }
+
   const voice = resolveSpeechVoice(lang, requestedVoice);
   const rate = clampSpeechRate(requestedRate);
-  const volume = clampSpeechVolume(requestedVolume);
   const args = [
     ...(voice ? ['-v', voice] : []),
     '-r',
@@ -611,11 +652,12 @@ app.post('/api/sessions', (req, res) => {
       session.objective = objective;
       sessionManager.updateSessionSummary(session.id, objective);
     }
+    const contextPath = ensureSessionContext(session);
     
     logger.info(`Created session: ${session.id}`);
-    io.emit('session:created', { id: session.id, session });
+    (io as any).emit('session:created', { id: session.id, session, contextPath });
     
-    res.status(201).json({ id: session.id, session });
+    res.status(201).json({ id: session.id, session, contextPath });
   } catch (error: unknown) {
     const message = getErrorMessage(error);
     logger.error('Failed to create session:', message);
@@ -722,8 +764,8 @@ app.put('/api/sessions/:id/resume', (req, res) => {
   }
 });
 
-// DELETE /api/sessions/:id - Close/archive session
-// Response: { archived: true }
+// DELETE /api/sessions/:id - Permanently delete session
+// Response: { deleted: true }
 app.delete('/api/sessions/:id', (req, res) => {
   try {
     const session = sessionManager.getSession(req.params.id);
@@ -732,14 +774,14 @@ app.delete('/api/sessions/:id', (req, res) => {
       return;
     }
 
-    sessionManager.closeSession(req.params.id);
-    logger.info(`Closed session: ${req.params.id}`);
-    io.emit('session:updated', { id: req.params.id, session });
+    sessionManager.deleteSession(req.params.id);
+    logger.info(`Deleted session: ${req.params.id}`);
+    (io as any).emit('session:deleted', { id: req.params.id, session });
     
-    res.json({ archived: true });
+    res.json({ deleted: true });
   } catch (error: unknown) {
     const message = getErrorMessage(error);
-    logger.error('Failed to close session:', message);
+    logger.error('Failed to delete session:', message);
     res.status(500).json({ error: message });
   }
 });
@@ -917,6 +959,62 @@ if (existsSync(FRONTEND_DIST_PATH)) {
 
     res.sendFile(path.join(FRONTEND_DIST_PATH, 'index.html'));
   });
+}
+
+type CopilotPromptJob = {
+  socket: any;
+  prompt: string;
+  sessionId?: string;
+};
+
+const copilotPromptQueue: CopilotPromptJob[] = [];
+let copilotPromptWorkerRunning = false;
+
+async function processCopilotPromptJob(job: CopilotPromptJob): Promise<void> {
+  const { socket, prompt, sessionId: sid } = job;
+  logger.copilot(`Starting queued prompt. session=${sid || 'none'} prompt="${prompt.slice(0, 120)}" queueRemaining=${copilotPromptQueue.length}`);
+  socket.emit('agent:status', { provider: 'copilot', phase: 'start', detail: prompt.slice(0, 80) });
+  let chunkCount = 0;
+  const session = sid ? sessionManager.getSession(sid) : null;
+  const effectivePrompt = session ? buildProviderPrompt(session, 'copilot', prompt) : prompt;
+  if (session) ensureSessionContext(session);
+  try {
+    const response = await copilotService.execute(
+      { prompt: effectivePrompt, workingDirectory: session?.repoPath || process.cwd(), sessionId: session?.id } as any,
+      (chunk, type) => {
+        chunkCount++;
+        logger.copilot(`Chunk ${chunkCount} (${type}) ${chunk.length} chars`);
+        socket.emit('agent:status', { provider: 'copilot', phase: 'chunk', detail: `${chunk.length} chars` });
+        socket.emit('command:chunk', { chunk });
+      }
+    );
+    if (session) {
+      appendSessionProgress(session, 'copilot', prompt, response.output);
+    }
+    logger.copilot(`Completed prompt. chunks=${chunkCount} outputLength=${response.output.length}`);
+    socket.emit('agent:status', { provider: 'copilot', phase: 'complete', detail: `${response.output.length} chars` });
+    socket.emit('command:response', {
+      result: response.output || '(no output)',
+      sessionId: session?.id || response.sessionId,
+    });
+  } catch (err: any) {
+    logger.error('Copilot prompt failed:', err.message);
+    socket.emit('agent:status', { provider: 'copilot', phase: 'error', detail: err.message });
+    socket.emit('command:response', { result: `Error: ${err.message}` });
+  }
+}
+
+async function drainCopilotPromptQueue(): Promise<void> {
+  if (copilotPromptWorkerRunning) return;
+  copilotPromptWorkerRunning = true;
+  try {
+    while (copilotPromptQueue.length > 0) {
+      const job = copilotPromptQueue.shift();
+      if (job) await processCopilotPromptJob(job);
+    }
+  } finally {
+    copilotPromptWorkerRunning = false;
+  }
 }
 
 io.on('connection', (socket) => {
@@ -1182,12 +1280,150 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     logger.warning(`Client disconnected: ${socket.id}`);
   });
+
+  // ── Simple prompt handler (used by AppClean.tsx) ────────────────────────
+  (socket as any).on('copilot:prompt', async ({ prompt, sessionId: sid }: { prompt: string; sessionId?: string }) => {
+    logger.copilot(`Prompt received. session=${sid || 'none'} prompt="${prompt.slice(0, 120)}"`);
+    copilotPromptQueue.push({ socket, prompt, sessionId: sid });
+    if (copilotPromptWorkerRunning || copilotService.isRunning()) {
+      logger.copilot(`Prompt queued. pending=${copilotPromptQueue.length}`);
+      (socket as any).emit('agent:status', {
+        provider: 'copilot',
+        phase: 'queued',
+        detail: `${copilotPromptQueue.length} pending`,
+      });
+    }
+    void drainCopilotPromptQueue();
+  });
+
+  // ── DB / session commands (used by AppClean.tsx) ─────────────────────────
+  (socket as any).on('db:command', (data: { type: string; name?: string }) => {
+    try {
+      switch (data.type) {
+        case 'status': {
+          const sid = copilotService.getMasterSessionId();
+          (socket as any).emit('command:response', {
+            result: `Session: ${sid || 'none (will create on next prompt)'}\nFile: .github/JARVIS_SESSION.md`,
+          });
+          break;
+        }
+        case 'new_session': {
+          copilotService.newSession();
+          (socket as any).emit('command:response', { result: 'Session cleared. Next prompt starts a fresh session.' });
+          break;
+        }
+        case 'list_sessions': {
+          const sid = copilotService.getMasterSessionId();
+          (socket as any).emit('command:response', {
+            result: `Master session: ${sid || 'none'}\nTracked in: .github/JARVIS_SESSION.md`,
+          });
+          break;
+        }
+        default:
+          (socket as any).emit('command:response', { result: `Unknown command: ${data.type}` });
+      }
+    } catch (err: any) {
+      (socket as any).emit('command:response', { result: `DB error: ${err.message}` });
+    }
+  });
+
+  // ── New Copilot session ───────────────────────────────────────────────────
+  (socket as any).on('copilot:new-session', () => {
+    copilotService.newSession();
+    (socket as any).emit('command:response', { result: 'New session started. Previous session ID cleared.' });
+  });
+
+  // ── Claude prompt handler ────────────────────────────────────────────────
+  (socket as any).on('claude:prompt', async ({ prompt, sessionId: sid }: { prompt: string; sessionId?: string }) => {
+    const session = sid ? sessionManager.getSession(sid) : null;
+    const agentSession = session?.id || sid || socket.id;
+    const effectivePrompt = session ? buildProviderPrompt(session, 'claude', prompt) : prompt;
+    console.log('[SOCKET] claude:prompt received:', prompt.slice(0, 100));
+    if (claudeService.isRunning()) {
+      (socket as any).emit('claude:response', {
+        status: 'busy',
+        result: 'Claude is already processing. Try again when the current run finishes.',
+        suppressSpeech: true,
+      });
+      return;
+    }
+    try {
+      (socket as any).emit('agent:status', { provider: 'claude', phase: 'start', detail: prompt.slice(0, 80) });
+      if (session) ensureSessionContext(session);
+      const response = await claudeService.prompt(effectivePrompt, agentSession, (chunk) => {
+        (socket as any).emit('agent:status', { provider: 'claude', phase: 'chunk', detail: `${chunk.length} chars` });
+        (socket as any).emit('claude:chunk', { chunk });
+      });
+      if (session) appendSessionProgress(session, 'claude', prompt, response);
+      (socket as any).emit('agent:status', { provider: 'claude', phase: 'complete', detail: `${response.length} chars` });
+      (socket as any).emit('claude:response', { result: response || '(no output)', sessionId: session?.id });
+    } catch (err: any) {
+      console.error('[SOCKET] Claude error:', err.message);
+      (socket as any).emit('agent:status', { provider: 'claude', phase: 'error', detail: err.message });
+      (socket as any).emit('claude:response', { result: `Claude error: ${err.message}` });
+    }
+  });
+
+  (socket as any).on('claude:abort', () => { claudeService.abort(); });
+  (socket as any).on('claude:new-session', ({ sessionId: sid }: { sessionId?: string }) => {
+    claudeService.clearHistory(sid || socket.id);
+    (socket as any).emit('claude:response', { result: 'Claude session cleared.' });
+  });
+
+  // ── Codex prompt handler ─────────────────────────────────────────────────
+  (socket as any).on('codex:prompt', async ({ prompt, sessionId: sid }: { prompt: string; sessionId?: string }) => {
+    const session = sid ? sessionManager.getSession(sid) : null;
+    const agentSession = session?.id || sid || socket.id;
+    const effectivePrompt = session ? buildProviderPrompt(session, 'codex', prompt) : prompt;
+    console.log('[SOCKET] codex:prompt received:', prompt.slice(0, 100));
+    if (codexService.isRunning()) {
+      (socket as any).emit('codex:response', {
+        status: 'busy',
+        result: 'Codex is already processing. Try again when the current run finishes.',
+        suppressSpeech: true,
+      });
+      return;
+    }
+    try {
+      (socket as any).emit('agent:status', { provider: 'codex', phase: 'start', detail: prompt.slice(0, 80) });
+      if (session) ensureSessionContext(session);
+      const response = await codexService.prompt(effectivePrompt, agentSession, (chunk) => {
+        (socket as any).emit('agent:status', { provider: 'codex', phase: 'chunk', detail: `${chunk.length} chars` });
+        (socket as any).emit('codex:chunk', { chunk });
+      });
+      if (session) appendSessionProgress(session, 'codex', prompt, response);
+      (socket as any).emit('agent:status', { provider: 'codex', phase: 'complete', detail: `${response.length} chars` });
+      (socket as any).emit('codex:response', { result: response || '(no output)', sessionId: session?.id });
+    } catch (err: any) {
+      console.error('[SOCKET] Codex error:', err.message);
+      (socket as any).emit('agent:status', { provider: 'codex', phase: 'error', detail: err.message });
+      (socket as any).emit('codex:response', { result: `Codex error: ${err.message}` });
+    }
+  });
+
+  (socket as any).on('codex:abort', () => { codexService.abort(); });
+  (socket as any).on('codex:new-session', ({ sessionId: sid }: { sessionId?: string }) => {
+    codexService.clearHistory(sid || socket.id);
+    (socket as any).emit('codex:response', { result: 'Codex session cleared.' });
+  });
+
+  // ── Context sharing: inject context from one agent into another ──────────
+  (socket as any).on('context:share', ({ from, to, sessionId: sid }: { from: string; to: string; sessionId?: string }) => {
+    const agentSession = sid || socket.id;
+    const sources: Record<string, { summary: string }> = {
+      copilot: { summary: `Copilot session: ${copilotService.getMasterSessionId() || 'none'}` },
+      claude:  { summary: claudeService.getContextSummary(agentSession) },
+      codex:   { summary: codexService.getContextSummary(agentSession) },
+    };
+    const ctx = sources[from]?.summary || '';
+    (socket as any).emit('context:shared', { from, to, context: ctx });
+  });
 });
 
 async function startServer() {
-  const activePort = await findAvailablePort(PORT);
+  const activePort = STRICT_PORT ? PORT : await findAvailablePort(PORT);
 
-  httpServer.listen(activePort, () => {
+  httpServer.listen(activePort, '0.0.0.0', () => {
     logger.success(`JARVIS Backend running on port ${activePort}`);
     logger.info(`Database path: ${DB_PATH}`);
     logger.info(`Frontend origin: ${FRONTEND_ORIGIN}`);
@@ -1201,7 +1437,11 @@ async function startServer() {
 
   httpServer.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code === 'EADDRINUSE') {
-      logger.error(`Unable to bind backend after fallback attempts starting from port ${PORT}.`);
+      logger.error(
+        STRICT_PORT
+          ? `Unable to bind backend on required port ${PORT}.`
+          : `Unable to bind backend after fallback attempts starting from port ${PORT}.`
+      );
       process.exit(1);
     }
 

@@ -102,9 +102,11 @@ export interface VoiceCommand {
 export interface RuntimeSummary {
   startedAt: number;
   databasePath: string;
+  workingDirectory: string;
   copilotCommand: string;
   copilotAvailable: boolean;
   copilotVersion?: string;
+  sessionId?: string;
   frontendOrigin: string;
   academicPptBaseUrl: string;
   conversationCount: number;

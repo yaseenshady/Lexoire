@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk '{print $2}')",
+      "Bash(python3 *)",
+      "Skill(claude-api)"
+    ]
+  }
+}

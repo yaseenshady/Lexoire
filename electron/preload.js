@@ -12,3 +12,17 @@ contextBridge.exposeInMainWorld('api', {
     }
   },
 });
+
+// JARVIS native bridge. Browser APIs are preferred in the UI; these are fallbacks.
+contextBridge.exposeInMainWorld('jarvis', {
+  platform: process.platform,
+  speak: (text) => ipcRenderer.invoke('tts:speak', text),
+  stopSpeech: () => ipcRenderer.invoke('tts:stop'),
+  requestMic: () => ipcRenderer.invoke('mic:request'),
+  startSpeech: () => ipcRenderer.invoke('speech:start'),
+  stopSpeechRecognition: () => ipcRenderer.invoke('speech:stop'),
+  onSpeech: (cb) => {
+    ipcRenderer.removeAllListeners('speech:event');
+    ipcRenderer.on('speech:event', (_, data) => cb(data));
+  },
+});

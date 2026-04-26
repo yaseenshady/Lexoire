@@ -1,28 +1,49 @@
 #!/usr/bin/env node
 
-// Create a simple PNG icon using raw binary
-// This creates a 256x256 solid blue PNG with JARVIS text
-const fs = require('fs');
+const { execFileSync } = require('child_process');
+const { existsSync } = require('fs');
+const { join } = require('path');
 
-// A simple way: create a minimal valid PNG
-// For now, just create a placeholder file that electron-builder can reference
-const pngData = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
-  0x00, 0x00, 0x00, 0x0d, // IHDR chunk size
-  0x49, 0x48, 0x44, 0x52, // IHDR
-  0x00, 0x00, 0x01, 0x00, // width: 256
-  0x00, 0x00, 0x01, 0x00, // height: 256
-  0x08, 0x02, // bit depth: 8, color type: 2 (RGB)
-  0x00, 0x00, 0x00, // compression, filter, interlace
-  0x0f, 0xab, 0xac, 0xca, // CRC
-  0x00, 0x00, 0x00, 0x00, // IDAT chunk size (we'll use placeholder)
-  0x49, 0x44, 0x41, 0x54, // IDAT
-  0x78, 0x9c, 0xed, 0xc1, 0x01, 0x01, 0x00, 0x00, 0x00, 0xc2, 0xa0, 0xf5, 0x4f, 0xea, 0x61, 0x0d, 0xa0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0xbe, 0x0d, 0xb4, 0x0b, // CRC
-  0x00, 0x00, 0x00, 0x00, // IEND chunk size
-  0x49, 0x45, 0x4e, 0x44, // IEND
-  0xae, 0x42, 0x60, 0x82, // CRC
-]);
+const root = __dirname;
+const source = join(root, 'assets', 'icon.svg');
+const target = join(root, 'assets', 'icon.png');
 
-fs.writeFileSync('./assets/icon.png', pngData);
-console.log('Icon created at ./assets/icon.png');
+if (!existsSync(source)) {
+  console.error(`Missing source icon: ${source}`);
+  process.exit(1);
+}
+
+function run(command, args) {
+  execFileSync(command, args, { stdio: 'inherit' });
+}
+
+function commandExists(command) {
+  try {
+    execFileSync('which', [command], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (commandExists('magick')) {
+  run('magick', [
+    '-background',
+    'none',
+    '-density',
+    '1024',
+    source,
+    '-resize',
+    '1024x1024',
+    target,
+  ]);
+} else if (commandExists('rsvg-convert')) {
+  run('rsvg-convert', ['-w', '1024', '-h', '1024', source, '-o', target]);
+} else if (commandExists('sips')) {
+  run('sips', ['-s', 'format', 'png', '-z', '1024', '1024', source, '--out', target]);
+} else {
+  console.error('Install ImageMagick or librsvg to compile electron/assets/icon.svg.');
+  process.exit(1);
+}
+
+console.log(`Compiled ${target}`);

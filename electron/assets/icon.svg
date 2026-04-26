@@ -1,5 +1,12 @@
-<svg width="256" height="256" xmlns="http://www.w3.org/2000/svg">
-  <rect width="256" height="256" fill="#1e40af"/>
-  <text x="128" y="140" font-size="120" font-weight="bold" text-anchor="middle" fill="white" font-family="Arial">J</text>
-  <text x="128" y="170" font-size="28" text-anchor="middle" fill="white" font-family="Arial">ARVIS</text>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1024" height="1024" rx="180" fill="#020403"/>
+  <rect x="112" y="132" width="800" height="760" rx="58" fill="#050a06" stroke="#19f56d" stroke-width="28"/>
+  <rect x="112" y="132" width="800" height="104" rx="58" fill="#0b1510"/>
+  <circle cx="176" cy="184" r="18" fill="#19f56d"/>
+  <circle cx="232" cy="184" r="18" fill="#0f7f3b"/>
+  <circle cx="288" cy="184" r="18" fill="#074f27"/>
+  <path d="M704 304V662C704 751 648 807 554 807C467 807 407 763 386 687L496 647C505 683 524 704 557 704C591 704 611 681 611 640V304H704Z" fill="#19f56d"/>
+  <path d="M287 404L391 512L287 620" fill="none" stroke="#19f56d" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="452" y="727" width="196" height="28" rx="14" fill="#19f56d"/>
+  <rect x="142" y="246" width="740" height="2" fill="#19f56d" opacity=".32"/>
 </svg>
