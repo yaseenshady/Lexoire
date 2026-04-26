@@ -1,4 +1,3 @@
-import OpenAI from 'openai';
 import { spawn, type ChildProcess } from 'child_process';
 
 const CODEX_CLI = process.env.CODEX_COMMAND?.trim() ||
@@ -59,14 +58,7 @@ class CodexService {
       history.push({ role: 'assistant', content: full });
       conversationHistory.set(sessionId, history.slice(-40));
     } catch (err) {
-      // API fallback
-      try {
-        full = await this.promptViaApi(history, onChunk);
-        history.push({ role: 'assistant', content: full });
-        conversationHistory.set(sessionId, history.slice(-40));
-      } catch (apiErr: any) {
-        throw apiErr;
-      }
+      throw err;
     } finally {
       this.running = false;
     }
@@ -123,6 +115,7 @@ class CodexService {
 
       let full = '';
       let buf = '';
+      let errorBuffer = '';
 
       const handleLine = (line: string) => {
         const t = line.trim();
@@ -175,14 +168,17 @@ class CodexService {
       });
 
       this.currentProcess.stderr?.on('data', (data: Buffer) => {
-        console.warn('[Codex CLI stderr]', data.toString().trim());
+        const chunk = data.toString();
+        errorBuffer += chunk;
+        console.warn('[Codex CLI stderr]', chunk.trim());
       });
 
       this.currentProcess.on('close', (code) => {
         this.currentProcess = null;
         if (buf.trim()) handleLine(buf);
         if (code !== 0 && !full) {
-          reject(new Error(`codex exited with code ${code}`));
+          const message = errorBuffer.trim() || `codex exited with code ${code}`;
+          reject(new Error(message));
         } else {
           resolve(full.trim());
         }
@@ -195,27 +191,6 @@ class CodexService {
     });
   }
 
-  private async promptViaApi(
-    history: Message[],
-    onChunk: (chunk: string) => void
-  ): Promise<string> {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const stream = await client.chat.completions.create({
-      model: process.env.CODEX_MODEL?.trim() || 'gpt-4o',
-      messages: [
-        { role: 'system', content: 'You are JARVIS Codex, an AI coding assistant. Be concise and direct.' },
-        ...history,
-      ],
-      stream: true,
-    });
-
-    let full = '';
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content ?? '';
-      if (delta) { onChunk(delta); full += delta; }
-    }
-    return full;
-  }
 }
 
 export default CodexService;
