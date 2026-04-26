@@ -645,7 +645,7 @@ app.get('/api/sessions', (req, res) => {
 });
 
 // POST /api/sessions - Create new session
-// Body: { name: string, repo_path: string, branch?: string, objective?: string }
+// Body: { name: string, repo_path: string, branch?: string, objective?: string, session_id?: string }
 // Response: { id: string, session: Session }
 app.post('/api/sessions', (req, res) => {
   try {
@@ -653,13 +653,14 @@ app.post('/api/sessions', (req, res) => {
     const repoPath = typeof req.body?.repo_path === 'string' ? req.body.repo_path : '';
     const branch = typeof req.body?.branch === 'string' ? req.body.branch : undefined;
     const objective = typeof req.body?.objective === 'string' ? req.body.objective : undefined;
+    const sessionId = typeof req.body?.session_id === 'string' ? req.body.session_id.trim() : '';
 
     if (!name.trim() || !repoPath.trim()) {
       res.status(400).json({ error: 'name and repo_path are required' });
       return;
     }
 
-    const session = sessionManager.createSession(name, repoPath, branch);
+    const session = sessionManager.createSession(name, repoPath, branch, sessionId || undefined);
     if (objective) {
       session.objective = objective;
       sessionManager.updateSessionSummary(session.id, objective);
@@ -673,7 +674,7 @@ app.post('/api/sessions', (req, res) => {
   } catch (error: unknown) {
     const message = getErrorMessage(error);
     logger.error('Failed to create session:', message);
-    res.status(500).json({ error: message });
+    res.status(message.includes('already exists') ? 409 : 500).json({ error: message });
   }
 });
 
@@ -1164,19 +1165,20 @@ io.on('connection', (socket) => {
   });
 
   // Client emits session:create
-  socket.on('session:create', (data: { name: string; repo_path: string; objective?: string; branch?: string }) => {
+  socket.on('session:create', (data: { name: string; repo_path: string; objective?: string; branch?: string; session_id?: string }) => {
     try {
       const name = typeof data?.name === 'string' ? data.name : '';
       const repo_path = typeof data?.repo_path === 'string' ? data.repo_path : '';
       const branch = typeof data?.branch === 'string' ? data.branch : undefined;
       const objective = typeof data?.objective === 'string' ? data.objective : undefined;
+      const sessionId = typeof data?.session_id === 'string' ? data.session_id.trim() : '';
 
       if (!name.trim() || !repo_path.trim()) {
         socket.emit('copilot:error', 'name and repo_path are required');
         return;
       }
 
-      const session = sessionManager.createSession(name, repo_path, branch);
+      const session = sessionManager.createSession(name, repo_path, branch, sessionId || undefined);
       if (objective) {
         session.objective = objective;
         sessionManager.updateSessionSummary(session.id, objective);

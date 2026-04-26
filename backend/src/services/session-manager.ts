@@ -10,10 +10,15 @@ class SessionManager {
     this.persistence = new SessionPersistence(db);
   }
 
-  createSession(name: string, repoPath: string, branch?: string): Session {
+  createSession(name: string, repoPath: string, branch?: string, sessionId?: string): Session {
     const now = Date.now();
+    const resolvedId = sessionId?.trim() || `session-${randomUUID()}`;
+    if (this.db.getSession(resolvedId)) {
+      throw new Error(`Session id "${resolvedId}" already exists`);
+    }
+
     const session: Session = {
-      id: `session-${randomUUID()}`,
+      id: resolvedId,
       name,
       copilotSessionId: `copilot-${randomUUID()}`,
       repoPath,

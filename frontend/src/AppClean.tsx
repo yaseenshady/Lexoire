@@ -33,6 +33,7 @@ interface SessionDraft {
   branch: string;
   objective: string;
   agent: Agent;
+  sessionId: string;
 }
 
 interface QueuedPrompt {
@@ -166,6 +167,7 @@ export default function App() {
     branch: '',
     objective: '',
     agent: 'copilot',
+    sessionId: '',
   });
   const [sessionNotice, setSessionNotice] = useState('');
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -1116,6 +1118,7 @@ export default function App() {
     const repoPath = sessionDraft.repoPath.trim();
     const branch = sessionDraft.branch.trim();
     const objective = sessionDraft.objective.trim();
+    const sessionId = sessionDraft.sessionId.trim();
     const selectedAgent = sessionDraft.agent;
     if (!name || !repoPath) {
       setSessionNotice('Name and repo path are required.');
@@ -1130,6 +1133,7 @@ export default function App() {
           repo_path: repoPath,
           branch: branch || undefined,
           objective: objective || undefined,
+          session_id: sessionId || undefined,
         }),
       });
       if (!response.ok) {
@@ -1152,8 +1156,9 @@ export default function App() {
         branch: '',
         objective: '',
         repoPath,
+        sessionId: '',
       }));
-      setSessionNotice(`Session "${name}" is ready.`);
+      setSessionNotice(sessionId ? `Session "${name}" is ready as ${sessionId}.` : `Session "${name}" is ready.`);
       await refreshWorkspaceSessions();
     } catch {
       setSessionNotice('Unable to create session.');
@@ -1962,6 +1967,21 @@ export default function App() {
                   />
                   <button onClick={createWorkspaceSession} style={{ background: '#10321b', border: '1px solid #10ff5030', color: '#afffc5', borderRadius: 6, padding: '7px 12px', fontSize: 10, fontFamily: 'inherit', cursor: 'pointer', textTransform: 'uppercase' }}>Add</button>
                 </div>
+                <input
+                  value={sessionDraft.sessionId}
+                  onChange={(e) => setSessionDraft((prev) => ({ ...prev, sessionId: e.target.value }))}
+                  placeholder="Custom session ID (optional)"
+                  style={{
+                    flex: 1,
+                    background: '#08140c',
+                    border: '1px solid #10ff5022',
+                    color: '#d4ffe0',
+                    fontFamily: 'inherit',
+                    fontSize: 11,
+                    padding: '8px 10px',
+                    borderRadius: 6,
+                  }}
+                />
                 <textarea
                   value={sessionDraft.objective}
                   onChange={(e) => setSessionDraft((prev) => ({ ...prev, objective: e.target.value }))}
