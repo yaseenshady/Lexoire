@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lexoire Developer Docs</title>
+  <meta
+    name="description"
+    content="Developer documentation for Lexoire: architecture, local development, voice routing, session lifecycle, and GitHub Pages publishing."
+  />
+  <link rel="icon" href="./icon.png" />
+  <link rel="stylesheet" href="./assets/styles.css" />
+</head>
+<body>
+  <div class="docs-readability-overlay" aria-hidden="true"></div>
+  <canvas class="matrix-canvas" data-matrix-canvas aria-hidden="true"></canvas>
+  <canvas class="flow-canvas" data-flow-canvas aria-hidden="true"></canvas>
+  <div class="sphere-focus" aria-hidden="true"></div>
+  <div class="cursor-glow" data-cursor-glow aria-hidden="true"></div>
+  <div class="cursor-reticle" data-cursor-reticle aria-hidden="true"></div>
+  <div class="crt-noise" aria-hidden="true"></div>
+  <div class="vertical-energy-bar" aria-hidden="true"></div>
+  <div class="scan-sweep" aria-hidden="true"></div>
+
+  <nav class="site-nav" data-site-nav>
+    <a class="brand" href="./index.html" aria-label="Lexoire home">
+      <span class="brand__mark">L</span>
+      <span class="brand__name">LEXOIRE</span>
+    </a>
+
+    <button class="nav-toggle" type="button" data-nav-toggle aria-label="Toggle navigation">
+      MENU
+    </button>
+
+    <div class="site-nav__links">
+      <a href="./index.html">Home</a>
+      <a href="./index.html#install">Install</a>
+      <a href="./developer-docs.html">Docs</a>
+    </div>
+  </nav>
+
+  <header class="docs-hero">
+    <p class="eyebrow terminal-reveal">LEXOIRE DOCS</p>
+    <h1 class="distort-heading terminal-reveal">Developer documentation.</h1>
+    <p class="hero-copy terminal-reveal">
+      Engineering reference for installing, running, packaging, and extending the voice layer for coding tools,
+      CLI copilots, durable sessions, and provider handoffs.
+    </p>
+  </header>
+
+  <main class="docs-layout">
+      <aside class="sidebar-panel">
+        <h2>Navigate the docs</h2>
+        <p>
+          The sidebar groups the practical surfaces of Lexoire so contributors can jump directly to the part they want to improve.
+        </p>
+
+        <nav class="doc-nav" data-scroll-nav aria-label="Developer docs navigation">
+          <details>
+            <summary>Start here</summary>
+            <div class="doc-nav__links">
+              <a class="doc-link" href="#project-overview">Project overview</a>
+              <a class="doc-link" href="#local-setup">Local setup</a>
+              <a class="doc-link" href="#build-and-run">Build and run</a>
+            </div>
+          </details>
+          <details>
+            <summary>Architecture</summary>
+            <div class="doc-nav__links">
+              <a class="doc-link" href="#system-architecture">System architecture</a>
+              <a class="doc-link" href="#frontend">Frontend</a>
+              <a class="doc-link" href="#backend">Backend</a>
+              <a class="doc-link" href="#electron">Electron</a>
+              <a class="doc-link" href="#database">Database</a>
+            </div>
+          </details>
+          <details>
+            <summary>Runtime flows</summary>
+            <div class="doc-nav__links">
+              <a class="doc-link" href="#voice-routing">Voice routing</a>
+              <a class="doc-link" href="#session-lifecycle">Session lifecycle</a>
+              <a class="doc-link" href="#copilot-integration">Copilot integration</a>
+            </div>
+          </details>
+          <details>
+            <summary>Open source</summary>
+            <div class="doc-nav__links">
+              <a class="doc-link" href="#contributing">Contributing</a>
+              <a class="doc-link" href="#publishing">Publishing docs</a>
+            </div>
+          </details>
+        </nav>
+      </aside>
+
+      <div class="docs-content">
+        <section class="doc-section" id="project-overview">
+          <span class="eyebrow">Start here</span>
+          <h2>Project overview</h2>
+          <p>
+            Lexoire is a voice-driven AI automation system for coordinating GitHub Copilot CLI sessions through a local-first interface.
+            The product brings together voice input, session routing, resumable CLI work, task visibility, and durable state so one user
+            can run multiple streams of AI-assisted work without losing the plot.
+          </p>
+          <div class="section-grid">
+            <article class="doc-card">
+              <h3>What the app exposes</h3>
+              <p>Conversation panels, memory panels, project plans, terminal output, settings, and active session coordination.</p>
+            </article>
+            <article class="doc-card">
+              <h3>What the backend manages</h3>
+              <p>Socket.IO events, Copilot CLI execution, SQLite persistence, session state transitions, and cross-session context.</p>
+            </article>
+          </div>
+          <div class="doc-callout">
+            <h3>Good mental model</h3>
+            <p>
+              Treat Lexoire as a control plane for AI work. The frontend captures intent, the backend routes and persists it,
+              and sessions remain durable enough to resume instead of starting over.
+            </p>
+          </div>
+        </section>
+
+        <section class="doc-section" id="local-setup">
+          <span class="eyebrow">Start here</span>
+          <h2>Local setup</h2>
+          <p>The repo is a unified workspace. Install dependencies once, then choose whether you want the browser workflow or the packaged Electron flow.</p>
+          <pre><code>npm run install:all</code></pre>
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Use</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>npm run dev</code></td>
+                <td>Runs frontend and backend together with hot reload.</td>
+              </tr>
+              <tr>
+                <td><code>npm run dev:frontend</code></td>
+                <td>Runs only the Vite frontend.</td>
+              </tr>
+              <tr>
+                <td><code>npm run dev:backend</code></td>
+                <td>Runs only the backend with nodemon + ts-node.</td>
+              </tr>
+              <tr>
+                <td><code>npm run electron:dev</code></td>
+                <td>Builds then launches the Electron shell.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="doc-section" id="build-and-run">
+          <span class="eyebrow">Start here</span>
+          <h2>Build and run</h2>
+          <p>Use the root scripts for the full workspace. The backend also has its own build and start scripts if you are working in isolation.</p>
+          <pre><code>npm run build
+npm start</code></pre>
+          <ul>
+            <li><strong>Frontend build output:</strong> <code>frontend/dist/</code></li>
+            <li><strong>Backend build output:</strong> <code>backend/dist/</code></li>
+            <li><strong>Electron packages:</strong> generated from the root packaging scripts and written into <code>dist/</code></li>
+          </ul>
+          <div class="doc-callout doc-callout--warning">
+            <h3>Developer note</h3>
+            <p>
+              The Electron shell starts the backend automatically and uses a fixed environment port, while local backend development
+              can scan ports 5000-5005 when needed.
+            </p>
+          </div>
+        </section>
+
+        <section class="doc-section" id="system-architecture">
+          <span class="eyebrow">Architecture</span>
+          <h2>System architecture</h2>
+          <p>The core runtime is easiest to understand as three connected processes plus a persistence layer.</p>
+          <pre><code>Electron main.js
+  └─ spawns backend
+     └─ serves frontend and APIs
+
+Frontend (React + Vite)
+  └─ Socket.IO client
+
+Backend (Express + Socket.IO)
+  └─ Copilot CLI subprocesses
+  └─ SQLite persistence</code></pre>
+          <div class="section-grid">
+            <article class="doc-card">
+              <h3>Frontend role</h3>
+              <p>Render the interface, capture input, and display live session, plan, and terminal state.</p>
+            </article>
+            <article class="doc-card">
+              <h3>Backend role</h3>
+              <p>Serve state, execute commands, stream updates, persist records, and coordinate session behavior.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="doc-section" id="frontend">
+          <span class="eyebrow">Architecture</span>
+          <h2>Frontend</h2>
+          <p>
+            The primary app entry is <code>frontend/src/AppClean.tsx</code>. It ties together the visible dashboard, silence-based
+            voice sending, socket events, and higher-level orchestration hooks.
+          </p>
+          <h3>Hooks worth knowing first</h3>
+          <ul>
+            <li><strong><code>useSocket</code>:</strong> manages the Socket.IO connection lifecycle.</li>
+            <li><strong><code>useVoiceRecognition</code>:</strong> handles Web Speech API recognition and silence detection.</li>
+            <li><strong><code>useSessionRouter</code>:</strong> parses voice commands and targets sessions.</li>
+            <li><strong><code>useVoiceRouting</code>:</strong> combines recognition and routing into a higher-level workflow.</li>
+            <li><strong><code>useSpeechSynthesis</code>:</strong> sends responses to browser speech or Electron IPC.</li>
+          </ul>
+          <div class="doc-callout">
+            <h3>Frontend contribution sweet spot</h3>
+            <p>
+              If you want high-leverage product work, improve session clarity, reduce noisy UI states, and make voice/terminal feedback
+              easier to trust at a glance.
+            </p>
+          </div>
+        </section>
+
+        <section class="doc-section" id="backend">
+          <span class="eyebrow">Architecture</span>
+          <h2>Backend</h2>
+          <p>
+            <code>backend/src/server.ts</code> is the runtime entry point. It wires Express routes, Socket.IO events, and the services
+            that manage sessions, persistence, and Copilot CLI execution.
+          </p>
+          <h3>Important backend services</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Responsibility</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>backend/src/db/database.ts</code></td>
+                <td>SQLite wrapper and schema creation.</td>
+              </tr>
+              <tr>
+                <td><code>backend/src/services/session-manager.ts</code></td>
+                <td>Session CRUD, focus, and state transitions.</td>
+              </tr>
+              <tr>
+                <td><code>backend/src/services/session-messaging.ts</code></td>
+                <td>Inter-session messages and context sharing.</td>
+              </tr>
+              <tr>
+                <td><code>backend/src/services/session-persistence.ts</code></td>
+                <td>Archiving and history management.</td>
+              </tr>
+              <tr>
+                <td><code>backend/src/copilot/copilot-service.ts</code></td>
+                <td>Copilot CLI execution and resumable session handling.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="doc-section" id="electron">
+          <span class="eyebrow">Architecture</span>
+          <h2>Electron</h2>
+          <p>
+            Electron turns the project into a packaged desktop app. The shell launches the backend, opens the browser window,
+            and exposes an IPC bridge for speech recognition and text-to-speech.
+          </p>
+          <ul>
+            <li><strong><code>electron/main.js</code>:</strong> backend startup and BrowserWindow creation.</li>
+            <li><strong><code>electron/preload.js</code>:</strong> safe IPC surface exposed as <code>window.jarvis</code>.</li>
+            <li><strong><code>swift/JarvisSpeech</code>:</strong> native macOS speech integration used by the desktop app.</li>
+          </ul>
+          <pre><code>npm run electron
+npm run electron:build:mac</code></pre>
+        </section>
+
+        <section class="doc-section" id="database">
+          <span class="eyebrow">Architecture</span>
+          <h2>Database</h2>
+          <p>
+            Lexoire uses SQLite for local-first persistence. The schema is created automatically, so there is no separate migration tool.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Table family</th>
+                <th>Purpose</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Sessions</td>
+                <td>Track current sessions, archive state, and history.</td>
+              </tr>
+              <tr>
+                <td>Conversations + messages</td>
+                <td>Persist chat history and execution context.</td>
+              </tr>
+              <tr>
+                <td>Memories</td>
+                <td>Store extracted, searchable context.</td>
+              </tr>
+              <tr>
+                <td>Plans + steps</td>
+                <td>Represent ongoing execution pipelines and status.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="doc-section" id="voice-routing">
+          <span class="eyebrow">Runtime flows</span>
+          <h2>Voice routing</h2>
+          <p>
+            Voice routing is what makes the app feel like orchestration instead of dictation. The router parses phrases like
+            “switch to planning”, “tell backend to fix login bug”, or “broadcast to all: run tests” and converts them into concrete routing actions.
+          </p>
+          <h3>Supported command patterns</h3>
+          <ul>
+            <li><strong>Switch:</strong> move active focus to another session.</li>
+            <li><strong>Tell:</strong> send a command to a named session.</li>
+            <li><strong>Broadcast:</strong> push one command to every active session.</li>
+            <li><strong>Pause / resume:</strong> manage execution state by voice.</li>
+          </ul>
+          <pre><code>const { parseCommand, executeRoute, setActiveSession } = useSessionRouter(...)</code></pre>
+        </section>
+
+        <section class="doc-section" id="session-lifecycle">
+          <span class="eyebrow">Runtime flows</span>
+          <h2>Session lifecycle</h2>
+          <p>Lexoire treats sessions as durable workers rather than throwaway chats.</p>
+          <ol>
+            <li>Create a session from the UI or a command.</li>
+            <li>Store the durable Copilot session identifier locally.</li>
+            <li>Resume with the stored session id instead of starting over.</li>
+            <li>Pause or archive when the work stream is complete.</li>
+          </ol>
+          <div class="doc-callout">
+            <h3>Design goal</h3>
+            <p>
+              A contributor touching session code should preserve resumability and visibility first. If work disappears or active state
+              becomes ambiguous, the product promise weakens quickly.
+            </p>
+          </div>
+        </section>
+
+        <section class="doc-section" id="copilot-integration">
+          <span class="eyebrow">Runtime flows</span>
+          <h2>Copilot integration</h2>
+          <p>
+            The backend spawns the Copilot CLI and streams output back to the frontend. The system is built around resumable sessions and
+            real-time updates rather than one-shot request/response exchanges.
+          </p>
+          <pre><code>const proc = spawn('copilot', ['--resume', SESSION_ID, '--output-format', 'json']);</code></pre>
+          <p>
+            Contributors working here should focus on reliability, clear surfaced errors, and preserving the link between backend runtime state and UI state.
+          </p>
+        </section>
+
+        <section class="doc-section" id="contributing">
+          <span class="eyebrow">Open source</span>
+          <h2>Contributing</h2>
+          <p>
+            The repo already has a straightforward contribution flow. Keep changes focused, run the existing build, and make it obvious
+            which surface you improved.
+          </p>
+          <pre><code>git clone https://github.com/YOUR_USERNAME/Lexoire.git
+cd Lexoire
+npm run install:all
+npm run dev</code></pre>
+          <ul>
+            <li>Create a feature branch for one coherent improvement.</li>
+            <li>Build with <code>npm run build</code> before opening a pull request.</li>
+            <li>Follow the existing TypeScript and project structure patterns.</li>
+            <li>Prefer improvements that increase clarity, reliability, and contributor legibility.</li>
+          </ul>
+        </section>
+
+        <section class="doc-section" id="publishing">
+          <span class="eyebrow">Open source</span>
+          <h2>Publishing docs for free on GitHub Pages</h2>
+          <p>
+            This docs site is intentionally buildless. Everything under <code>website/</code> is static and deploys through GitHub Actions,
+            which keeps hosting free and easy to maintain.
+          </p>
+          <pre><code>.github/workflows/deploy-website.yml
+website/
+  index.html
+  developer-docs.html
+  assets/</code></pre>
+          <ul>
+            <li>The workflow deploys on pushes to <code>main</code> or <code>master</code>.</li>
+            <li>The Pages artifact is the <code>website/</code> directory.</li>
+            <li>No separate docs framework is required to publish updates.</li>
+          </ul>
+          <div class="doc-callout">
+            <h3>What to do after merge</h3>
+            <p>
+              Once this branch is pushed to the default branch, GitHub Actions will publish the site. If Pages is not already configured,
+              set the repository to deploy from GitHub Actions.
+            </p>
+          </div>
+        </section>
+      </div>
+  </main>
+
+  <footer class="terminal-footer">
+    <span>LEXOIRE DOCS</span>
+    <span><a href="https://github.com/yaseensh/Lexoire" target="_blank" rel="noreferrer">REPOSITORY</a></span>
+    <span><span data-current-year></span></span>
+  </footer>
+
+  <script src="./assets/site.js"></script>
+</body>
+</html>

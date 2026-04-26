@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lexoire | Voice Command Terminal</title>
+  <meta
+    name="description"
+    content="Lexoire is a cinematic voice command terminal for routing AI work through visible sessions, providers, and durable context."
+  />
+  <link rel="icon" href="./icon.png" />
+  <link rel="stylesheet" href="./assets/styles.css" />
+</head>
+<body>
+  <canvas class="matrix-canvas" data-matrix-canvas aria-hidden="true"></canvas>
+  <canvas class="flow-canvas" data-flow-canvas aria-hidden="true"></canvas>
+  <div class="sphere-focus" aria-hidden="true"></div>
+  <div class="cursor-glow" data-cursor-glow aria-hidden="true"></div>
+  <div class="cursor-reticle" data-cursor-reticle aria-hidden="true"></div>
+  <div class="crt-noise" aria-hidden="true"></div>
+  <div class="vertical-energy-bar" aria-hidden="true"></div>
+  <div class="scan-sweep" aria-hidden="true"></div>
+
+  <nav class="site-nav" data-site-nav>
+    <a class="brand" href="./index.html" aria-label="Lexoire home">
+      <span class="brand__mark">L</span>
+      <span class="brand__name">LEXOIRE</span>
+    </a>
+
+    <button class="nav-toggle" type="button" data-nav-toggle aria-label="Toggle navigation">
+      MENU
+    </button>
+
+    <div class="site-nav__links" data-scroll-nav>
+      <a href="#home">Home</a>
+      <a href="#install">Install</a>
+      <a href="./developer-docs.html">Docs</a>
+    </div>
+  </nav>
+
+  <main class="terminal-page">
+    <section class="terminal-hero" id="home">
+      <p class="eyebrow hero-kicker terminal-reveal">ABOUT LEXOIRE</p>
+      <h1 class="glitch-title hero-title terminal-reveal" data-text="LEXOIRE">LEXOIRE</h1>
+      <p class="hero-copy terminal-reveal">
+        Lexoire is a voice command layer for coding tools, CLI copilots, and agent sessions.
+        It turns spoken developer intent into a visible terminal flow with session memory, provider routing, and live processing state.
+      </p>
+
+      <div class="terminal-actions terminal-reveal">
+        <a href="#install">INSTALL</a>
+        <a href="./developer-docs.html">DOCS</a>
+        <a href="https://github.com/yaseensh/Lexoire" target="_blank" rel="noreferrer">GITHUB</a>
+      </div>
+
+      <p class="typing-command terminal-reveal" aria-label="Lexoire typing prompt">
+        <span>voice to copilots, routed with memory</span>
+      </p>
+    </section>
+
+    <section class="terminal-section">
+      <div class="section-rule" aria-hidden="true"></div>
+      <p class="eyebrow terminal-reveal">PROJECT PROBLEM STATEMENT</p>
+      <h2 class="distort-heading terminal-reveal">Coding copilots are powerful, but voice control is fragmented.</h2>
+      <div class="flow-script">
+        <p class="terminal-line"><span>PAIN</span> developers jump between terminals, IDE copilots, Claude, Codex, and GitHub Copilot with no shared voice layer.</p>
+        <p class="terminal-line"><span>LOSS</span> spoken instructions disappear unless they are attached to the right session, repo, provider, and task history.</p>
+        <p class="terminal-line"><span>RACE</span> CLI copilots stream, queue, fail, or wait silently, making voice workflows feel unreliable.</p>
+        <p class="terminal-line"><span>GOAL</span> Lexoire gives voice a command surface for routing, tracking, and resuming coding work across tools.</p>
+      </div>
+    </section>
+
+    <section class="terminal-section" id="install">
+      <div class="section-rule" aria-hidden="true"></div>
+      <p class="eyebrow terminal-reveal">INSTALL LEXOIRE</p>
+      <h2 class="distort-heading terminal-reveal">One voice terminal across Mac, Linux, and Windows.</h2>
+      <div class="install-grid" aria-label="Lexoire install downloads">
+        <a class="install-button terminal-line" href="https://github.com/yaseensh/Lexoire/releases/latest/download/LEXOIRE-1.0.0-mac-universal.dmg">
+          <span class="install-logo install-logo--apple" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="img">
+              <path d="M16.6 12.5c0-2.1 1.7-3.1 1.8-3.2-1-1.5-2.6-1.7-3.1-1.8-1.3-.1-2.6.8-3.3.8-.7 0-1.8-.8-2.9-.8-1.5 0-2.9.9-3.7 2.2-1.6 2.8-.4 6.9 1.1 9.2.8 1.1 1.7 2.4 2.9 2.3 1.1 0 1.6-.7 3-.7s1.8.7 3 .7c1.2 0 2-.1 2.9-1.3.9-1.3 1.2-2.5 1.2-2.6 0 0-2.4-.9-2.4-3.7zm-2.2-6.4c.7-.8 1.1-1.9 1-3.1-1 .1-2.1.7-2.8 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.1-.6 2.8-1.4z" />
+            </svg>
+          </span>
+          <span class="install-copy">
+            <strong>Mac</strong>
+          </span>
+        </a>
+        <a class="install-button terminal-line" href="https://github.com/yaseensh/Lexoire/releases/latest/download/LEXOIRE-1.0.0-linux-x86_64.AppImage">
+          <span class="install-logo install-logo--linux" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="img">
+              <path d="M12 2.5c-2.2 0-3.8 2-3.8 4.8 0 1-.2 1.8-.8 2.8L4.7 15c-.8 1.5-.1 3.4 1.5 4l2.2.9c.9.4 1.9.6 3 .6h1.2c1.1 0 2.1-.2 3-.6l2.2-.9c1.6-.7 2.3-2.5 1.5-4l-2.7-4.9c-.6-1-.8-1.8-.8-2.8 0-2.8-1.6-4.8-3.8-4.8zm-1.5 4.4c.4 0 .8.4.8.9s-.4.9-.8.9-.8-.4-.8-.9.4-.9.8-.9zm3 0c.4 0 .8.4.8.9s-.4.9-.8.9-.8-.4-.8-.9.4-.9.8-.9zM9 15.7l2.4.8c.4.1.8.1 1.2 0l2.4-.8.4 1.4-2.2.9c-.8.3-1.7.3-2.5 0l-2.2-.9.5-1.4z" />
+            </svg>
+          </span>
+          <span class="install-copy">
+            <strong>Linux</strong>
+          </span>
+        </a>
+        <a class="install-button terminal-line" href="https://github.com/yaseensh/Lexoire/releases/latest/download/LEXOIRE-1.0.0-win-x64-setup.exe">
+          <span class="install-logo install-logo--windows" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="img">
+              <path d="M3 5.2 10.7 4v7.5H3V5.2zm8.7-1.4L21 2.4v9.1h-9.3V3.8zM3 12.5h7.7V20L3 18.8v-6.3zm8.7 0H21v9.1l-9.3-1.4v-7.7z" />
+            </svg>
+          </span>
+          <span class="install-copy">
+            <strong>Windows</strong>
+          </span>
+        </a>
+      </div>
+    </section>
+
+    <section class="terminal-section">
+      <div class="section-rule" aria-hidden="true"></div>
+      <p class="eyebrow terminal-reveal">HOW LEXOIRE WORKS</p>
+      <h2 class="distort-heading terminal-reveal">Capture. Route. Process. Persist.</h2>
+      <div class="flow-script">
+        <p class="terminal-line"><span>01</span> Broken voice chain detected: speech is heard, but the system loses continuity.</p>
+        <p class="terminal-line"><span>02</span> Lexoire locks the signal into an explicit session before work begins.</p>
+        <p class="terminal-line"><span>03</span> Provider context travels with the request instead of being recreated every turn.</p>
+        <p class="terminal-line"><span>04</span> Processing remains visible until the stream completes or the queue drains.</p>
+        <p class="terminal-line"><span>05</span> The resulting context persists for the next turn, provider, or handoff.</p>
+      </div>
+    </section>
+
+    <section class="terminal-section">
+      <div class="section-rule" aria-hidden="true"></div>
+      <p class="eyebrow terminal-reveal">AI OPERATING SURFACE</p>
+      <h2 class="distort-heading terminal-reveal">One continuous terminal, no boxed interface.</h2>
+      <div class="system-grid">
+        <p class="terminal-line"><span>LIGHT</span> volumetric green beams bend with scroll pressure</p>
+        <p class="terminal-line"><span>RAIN</span> faint matrix code falls behind the command text</p>
+        <p class="terminal-line"><span>LINES</span> circuit traces crawl across the background grid</p>
+        <p class="terminal-line"><span>SPARK</span> particles accelerate when the page moves</p>
+        <p class="terminal-line"><span>GLASS</span> distortion waves refract through the black canvas</p>
+        <p class="terminal-line"><span>CURSOR</span> scanner glow follows the operator in real time</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="terminal-footer">
+    <span>LEXOIRE</span>
+    <span>VOICE COMMAND INFRASTRUCTURE</span>
+    <span><span data-current-year></span></span>
+  </footer>
+
+  <script src="./assets/site.js"></script>
+</body>
+</html>
