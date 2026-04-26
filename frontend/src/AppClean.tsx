@@ -1489,7 +1489,7 @@ export default function App() {
     rememberSpokenText(next);
     setInterim('');
     interimRef.current = '';
-    scheduleListeningResume(120);
+    stopListening();
 
     const finish = () => {
       if (!speechActiveRef.current && speechQueueRef.current.length === 0) {
