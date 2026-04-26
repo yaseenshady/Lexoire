@@ -18,6 +18,16 @@ class Logger {
     return new Date().toLocaleTimeString();
   }
 
+  private safeConsole(method: 'log' | 'error', ...args: any[]) {
+    try {
+      console[method](...args);
+    } catch (error: any) {
+      if (error?.code !== 'EPIPE') {
+        throw error;
+      }
+    }
+  }
+
   private writeFile(level: string, message: string, args: any[]) {
     try {
       const dir = path.dirname(this.logFile);
@@ -32,8 +42,9 @@ class Logger {
 
   info(message: string, ...args: any[]) {
     this.writeFile('INFO', message, args);
-    console.log(
-      `${colors.cyan}[${this.formatTime()}] ℹ️  INFO:${colors.reset}`,
+    this.safeConsole(
+      'log',
+      `${colors.cyan}[${this.formatTime()}] INFO:${colors.reset}`,
       message,
       ...args
     );
@@ -41,8 +52,9 @@ class Logger {
 
   success(message: string, ...args: any[]) {
     this.writeFile('SUCCESS', message, args);
-    console.log(
-      `${colors.green}[${this.formatTime()}] ✅ SUCCESS:${colors.reset}`,
+    this.safeConsole(
+      'log',
+      `${colors.green}[${this.formatTime()}] SUCCESS:${colors.reset}`,
       message,
       ...args
     );
@@ -50,8 +62,9 @@ class Logger {
 
   warning(message: string, ...args: any[]) {
     this.writeFile('WARNING', message, args);
-    console.log(
-      `${colors.yellow}[${this.formatTime()}] ⚠️  WARNING:${colors.reset}`,
+    this.safeConsole(
+      'log',
+      `${colors.yellow}[${this.formatTime()}] WARNING:${colors.reset}`,
       message,
       ...args
     );
@@ -59,8 +72,9 @@ class Logger {
 
   error(message: string, ...args: any[]) {
     this.writeFile('ERROR', message, args);
-    console.error(
-      `${colors.red}[${this.formatTime()}] ❌ ERROR:${colors.reset}`,
+    this.safeConsole(
+      'error',
+      `${colors.red}[${this.formatTime()}] ERROR:${colors.reset}`,
       message,
       ...args
     );
@@ -69,8 +83,9 @@ class Logger {
   debug(message: string, ...args: any[]) {
     this.writeFile('DEBUG', message, args);
     if (process.env.NODE_ENV === 'development') {
-      console.log(
-        `${colors.magenta}[${this.formatTime()}] 🐛 DEBUG:${colors.reset}`,
+      this.safeConsole(
+        'log',
+        `${colors.magenta}[${this.formatTime()}] DEBUG:${colors.reset}`,
         message,
         ...args
       );
@@ -79,8 +94,9 @@ class Logger {
 
   copilot(message: string, ...args: any[]) {
     this.writeFile('COPILOT', message, args);
-    console.log(
-      `${colors.bright}${colors.cyan}[${this.formatTime()}] 🤖 COPILOT:${colors.reset}`,
+    this.safeConsole(
+      'log',
+      `${colors.bright}${colors.cyan}[${this.formatTime()}] COPILOT:${colors.reset}`,
       message,
       ...args
     );

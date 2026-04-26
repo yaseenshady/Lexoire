@@ -169,7 +169,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, settings, 
                   {
                     key: 'speakResponses',
                     label: 'Speak assistant responses',
-                    description: 'Read JARVIS replies aloud with your browser voice.'
+                    description: 'Read LEXOIRE replies aloud with your browser voice.'
                   }
                 ].map(({ key, label, description }) => (
                   <label key={key} className="flex items-start justify-between gap-4 cursor-pointer group rounded-lg border border-white/10 p-4 bg-white/5">

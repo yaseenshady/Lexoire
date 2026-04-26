@@ -3,80 +3,60 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>JARVIS Developer Docs</title>
+  <title>Lexoire Developer Docs</title>
   <meta
     name="description"
-    content="Developer documentation for JARVIS: architecture, local development, voice routing, session lifecycle, and GitHub Pages publishing."
+    content="Developer documentation for Lexoire: architecture, local development, voice routing, session lifecycle, and GitHub Pages publishing."
   />
   <link rel="icon" href="./icon.png" />
   <link rel="stylesheet" href="./assets/styles.css" />
 </head>
 <body>
-  <div class="page-shell">
-    <nav class="site-nav" data-site-nav>
-      <div class="container site-nav__inner">
-        <a class="brand" href="./index.html" aria-label="JARVIS home">
-          <span class="brand__mark">J</span>
-          <span>
-            <span class="brand__name">JARVIS</span>
-            <span class="brand__meta">Developer documentation</span>
-          </span>
-        </a>
+  <div class="docs-readability-overlay" aria-hidden="true"></div>
+  <canvas class="matrix-canvas" data-matrix-canvas aria-hidden="true"></canvas>
+  <canvas class="flow-canvas" data-flow-canvas aria-hidden="true"></canvas>
+  <div class="sphere-focus" aria-hidden="true"></div>
+  <div class="cursor-glow" data-cursor-glow aria-hidden="true"></div>
+  <div class="cursor-reticle" data-cursor-reticle aria-hidden="true"></div>
+  <div class="crt-noise" aria-hidden="true"></div>
+  <div class="vertical-energy-bar" aria-hidden="true"></div>
+  <div class="scan-sweep" aria-hidden="true"></div>
 
-        <button class="nav-toggle" type="button" data-nav-toggle aria-label="Toggle navigation">
-          Menu
-        </button>
+  <nav class="site-nav" data-site-nav>
+    <a class="brand" href="./index.html" aria-label="Lexoire home">
+      <span class="brand__mark">L</span>
+      <span class="brand__name">LEXOIRE</span>
+    </a>
 
-        <div class="site-nav__menu">
-          <div class="site-nav__links">
-            <a href="./index.html">Home</a>
-            <a href="#project-overview">Overview</a>
-            <a href="#system-architecture">Architecture</a>
-            <a href="#contributing">Contributing</a>
-          </div>
-          <div class="nav-actions">
-            <a class="button button--ghost" href="https://github.com/yshady/jarvis" target="_blank" rel="noreferrer">GitHub</a>
-          </div>
-        </div>
-      </div>
-    </nav>
+    <button class="nav-toggle" type="button" data-nav-toggle aria-label="Toggle navigation">
+      MENU
+    </button>
 
-    <header class="page-hero">
-      <div class="container">
-        <section class="page-hero__panel hero__panel">
-          <span class="eyebrow">Developer docs</span>
-          <h1>Build on JARVIS without guessing how it fits together.</h1>
-          <p>
-            This page is the engineering reference for the project: how to run it, where the important code lives,
-            how voice routing and session orchestration work, and how the docs site publishes for free on GitHub Pages.
-          </p>
-          <div class="page-hero__meta">
-            <article class="card">
-              <strong>Frontend</strong>
-              <p>React + TypeScript + Vite control surface and hooks.</p>
-            </article>
-            <article class="card">
-              <strong>Backend</strong>
-              <p>Express + Socket.IO orchestration and SQLite persistence.</p>
-            </article>
-            <article class="card">
-              <strong>Desktop</strong>
-              <p>Electron shell with native speech and app packaging.</p>
-            </article>
-          </div>
-        </section>
-      </div>
-    </header>
+    <div class="site-nav__links">
+      <a href="./index.html">Home</a>
+      <a href="./index.html#install">Install</a>
+      <a href="./developer-docs.html">Docs</a>
+    </div>
+  </nav>
 
-    <main class="container docs-layout">
+  <header class="docs-hero">
+    <p class="eyebrow terminal-reveal">LEXOIRE DOCS</p>
+    <h1 class="distort-heading terminal-reveal">Developer documentation.</h1>
+    <p class="hero-copy terminal-reveal">
+      Engineering reference for installing, running, packaging, and extending the voice layer for coding tools,
+      CLI copilots, durable sessions, and provider handoffs.
+    </p>
+  </header>
+
+  <main class="docs-layout">
       <aside class="sidebar-panel">
         <h2>Navigate the docs</h2>
         <p>
-          The sidebar groups the practical surfaces of JARVIS so contributors can jump directly to the part they want to improve.
+          The sidebar groups the practical surfaces of Lexoire so contributors can jump directly to the part they want to improve.
         </p>
 
         <nav class="doc-nav" data-scroll-nav aria-label="Developer docs navigation">
-          <details open>
+          <details>
             <summary>Start here</summary>
             <div class="doc-nav__links">
               <a class="doc-link" href="#project-overview">Project overview</a>
@@ -84,7 +64,7 @@
               <a class="doc-link" href="#build-and-run">Build and run</a>
             </div>
           </details>
-          <details open>
+          <details>
             <summary>Architecture</summary>
             <div class="doc-nav__links">
               <a class="doc-link" href="#system-architecture">System architecture</a>
@@ -117,7 +97,7 @@
           <span class="eyebrow">Start here</span>
           <h2>Project overview</h2>
           <p>
-            JARVIS is a voice-driven AI automation system for coordinating GitHub Copilot CLI sessions through a local-first interface.
+            Lexoire is a voice-driven AI automation system for coordinating GitHub Copilot CLI sessions through a local-first interface.
             The product brings together voice input, session routing, resumable CLI work, task visibility, and durable state so one user
             can run multiple streams of AI-assisted work without losing the plot.
           </p>
@@ -134,7 +114,7 @@
           <div class="doc-callout">
             <h3>Good mental model</h3>
             <p>
-              Treat JARVIS as a control plane for AI work. The frontend captures intent, the backend routes and persists it,
+              Treat Lexoire as a control plane for AI work. The frontend captures intent, the backend routes and persists it,
               and sessions remain durable enough to resume instead of starting over.
             </p>
           </div>
@@ -303,7 +283,7 @@ npm run electron:build:mac</code></pre>
           <span class="eyebrow">Architecture</span>
           <h2>Database</h2>
           <p>
-            JARVIS uses SQLite for local-first persistence. The schema is created automatically, so there is no separate migration tool.
+            Lexoire uses SQLite for local-first persistence. The schema is created automatically, so there is no separate migration tool.
           </p>
           <table>
             <thead>
@@ -353,7 +333,7 @@ npm run electron:build:mac</code></pre>
         <section class="doc-section" id="session-lifecycle">
           <span class="eyebrow">Runtime flows</span>
           <h2>Session lifecycle</h2>
-          <p>JARVIS treats sessions as durable workers rather than throwaway chats.</p>
+          <p>Lexoire treats sessions as durable workers rather than throwaway chats.</p>
           <ol>
             <li>Create a session from the UI or a command.</li>
             <li>Store the durable Copilot session identifier locally.</li>
@@ -389,8 +369,8 @@ npm run electron:build:mac</code></pre>
             The repo already has a straightforward contribution flow. Keep changes focused, run the existing build, and make it obvious
             which surface you improved.
           </p>
-          <pre><code>git clone https://github.com/YOUR_USERNAME/jarvis.git
-cd jarvis
+          <pre><code>git clone https://github.com/YOUR_USERNAME/Lexoire.git
+cd Lexoire
 npm run install:all
 npm run dev</code></pre>
           <ul>
@@ -427,24 +407,13 @@ website/
           </div>
         </section>
       </div>
-    </main>
+  </main>
 
-    <footer class="site-footer">
-      <div class="container">
-        <div class="site-footer__panel">
-          <div>
-            <strong>JARVIS developer docs</strong>
-            <p>Clean public docs for contributors, hosted on GitHub Pages.</p>
-          </div>
-          <div class="site-footer__links">
-            <a href="./index.html">Home</a>
-            <a href="https://github.com/yshady/jarvis" target="_blank" rel="noreferrer">Repository</a>
-          </div>
-          <p>© <span data-current-year></span> JARVIS</p>
-        </div>
-      </div>
-    </footer>
-  </div>
+  <footer class="terminal-footer">
+    <span>LEXOIRE DOCS</span>
+    <span><a href="https://github.com/yaseensh/Lexoire" target="_blank" rel="noreferrer">REPOSITORY</a></span>
+    <span><span data-current-year></span></span>
+  </footer>
 
   <script src="./assets/site.js"></script>
 </body>

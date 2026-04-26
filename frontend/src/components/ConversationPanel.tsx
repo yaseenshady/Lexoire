@@ -99,7 +99,7 @@ export const ConversationPanel: React.FC<ConversationPanelProps> = ({
             >
               <p className="text-lg font-semibold text-white mb-2">No conversation yet</p>
               <p className="text-sm text-white/70 max-w-xl mx-auto mb-8">
-                Start with voice or run one of the quick prompts below to begin exploring JARVIS.
+                Start with voice or run one of the quick prompts below to begin exploring LEXOIRE.
               </p>
             </motion.div>
 

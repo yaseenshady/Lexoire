@@ -88,6 +88,7 @@ class ClaudeService {
     return new Promise((resolve, reject) => {
       const args: string[] = [
         '--print',
+        '--verbose',
         '--dangerously-skip-permissions',
         '--output-format', 'stream-json',
         '--system-prompt', SYSTEM_PROMPT,
@@ -117,22 +118,31 @@ class ClaudeService {
         if (!t) return;
         try {
           const ev = JSON.parse(t);
-          // Stream text deltas
+          // --print --verbose mode: text in assistant.message.content[]
+          if (ev.type === 'assistant' && Array.isArray(ev.message?.content)) {
+            for (const block of ev.message.content) {
+              if (block.type === 'text' && block.text) {
+                onChunk(block.text);
+                full += block.text;
+              }
+            }
+          }
+          // Streaming mode (non-print): content_block_delta
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
             onChunk(ev.delta.text);
             full += ev.delta.text;
           }
-          // Capture session ID from result event
+          // Capture session ID
           if (ev.type === 'result' && ev.session_id) {
             newSessionId = ev.session_id;
           }
-          // Full result fallback if no streaming deltas came through
+          // Fallback: result.result text if nothing else fired
           if (ev.type === 'result' && ev.result && !full) {
             onChunk(ev.result);
             full = ev.result;
           }
         } catch {
-          // Non-JSON lines: pass through as-is
+          // Non-JSON lines: ignore
         }
       };
 

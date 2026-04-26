@@ -31,6 +31,18 @@ import type {
 
 dotenv.config();
 
+process.stdout.on('error', (error: any) => {
+  if (error?.code !== 'EPIPE') {
+    throw error;
+  }
+});
+
+process.stderr.on('error', (error: any) => {
+  if (error?.code !== 'EPIPE') {
+    throw error;
+  }
+});
+
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY?.trim() || '';
 // Default: ElevenLabs "Adam" premade voice (deep, clear AI-assistant voice)
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID?.trim() || 'pNInz6obpgDQGcFmaJgB';
@@ -88,7 +100,7 @@ app.use(cors({
       return;
     }
 
-    callback(new Error(`Origin ${origin || 'unknown'} is not allowed by JARVIS`));
+    callback(new Error(`Origin ${origin || 'unknown'} is not allowed by LEXOIRE`));
   }
 }));
 app.use(express.json());
@@ -343,7 +355,7 @@ function createExecutionPlan(command: CopilotCommand, createdAt: number): Projec
 
   return {
     id: planId,
-    title: shortPrompt || 'JARVIS execution',
+    title: shortPrompt || 'LEXOIRE execution',
     description: `Execution pipeline for "${shortPrompt || 'untitled command'}"`,
     status: 'in-progress',
     createdAt,
@@ -993,8 +1005,9 @@ async function processCopilotPromptJob(job: CopilotPromptJob): Promise<void> {
     }
     logger.copilot(`Completed prompt. chunks=${chunkCount} outputLength=${response.output.length}`);
     socket.emit('agent:status', { provider: 'copilot', phase: 'complete', detail: `${response.output.length} chars` });
+    const resultText = response.output.trim() || (response.error ? `Copilot error: ${response.error}` : '(no output)');
     socket.emit('command:response', {
-      result: response.output || '(no output)',
+      result: resultText,
       sessionId: session?.id || response.sessionId,
     });
   } catch (err: any) {
@@ -1424,7 +1437,7 @@ async function startServer() {
   const activePort = STRICT_PORT ? PORT : await findAvailablePort(PORT);
 
   httpServer.listen(activePort, '0.0.0.0', () => {
-    logger.success(`JARVIS Backend running on port ${activePort}`);
+    logger.success(`LEXOIRE Backend running on port ${activePort}`);
     logger.info(`Database path: ${DB_PATH}`);
     logger.info(`Frontend origin: ${FRONTEND_ORIGIN}`);
 
@@ -1465,6 +1478,11 @@ process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
 process.on('uncaughtException', (error) => {
+  if ((error as NodeJS.ErrnoException)?.code === 'EPIPE') {
+    logger.warning('Ignoring broken stdout/stderr pipe.');
+    return;
+  }
+
   logger.error('Uncaught Exception:', error);
   shutdown(1);
 });

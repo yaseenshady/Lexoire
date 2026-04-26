@@ -36,7 +36,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <div className="text-center">
               <h1 className="text-4xl font-bold neon-text mb-4">⚠️ System Error</h1>
               <p className="text-white/80 mb-6">
-                JARVIS encountered an unexpected error. Please reload the application.
+                LEXOIRE encountered an unexpected error. Please reload the application.
               </p>
               
               <div className="bg-red-500/20 border border-red-500 rounded-lg p-4 mb-6 text-left">

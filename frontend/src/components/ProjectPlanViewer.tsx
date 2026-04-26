@@ -13,7 +13,7 @@ export const ProjectPlanViewer: React.FC<ProjectPlanViewerProps> = ({ plan }) =>
         <div className="text-center text-white/55 max-w-md">
           <p className="text-lg text-white">No recent execution plan</p>
           <p className="text-sm mt-2">
-            Once you run a command, JARVIS will store the execution pipeline here so you can review what happened.
+            Once you run a command, LEXOIRE will store the execution pipeline here so you can review what happened.
           </p>
           <div className="mt-4 rounded-lg border border-white/10 bg-white/5 p-4 text-left text-sm text-white/65">
             This panel reflects backend state, not a mock view, so it stays empty until the app has real execution history.

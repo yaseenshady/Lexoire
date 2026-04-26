@@ -6,6 +6,13 @@ JARVIS is now a **single local workspace** for voice-driven Copilot automation:
 - **Backend**: Express + Socket.IO runtime that executes the Copilot CLI, persists conversations in SQLite, derives searchable memories, and serves the production frontend bundle.
 - **Persistence**: SQLite stores conversations, generated memories, and the latest execution plan so the app can restore context on reload.
 
+## Public website and docs
+
+- **Site source**: `website/`
+- **Landing page**: `website/index.html`
+- **Developer docs**: `website/developer-docs.html`
+- **Free hosting**: GitHub Pages via `.github/workflows/deploy-website.yml`
+
 ## Architecture
 
 ### Frontend

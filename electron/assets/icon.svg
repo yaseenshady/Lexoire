@@ -5,8 +5,9 @@
   <circle cx="176" cy="184" r="18" fill="#19f56d"/>
   <circle cx="232" cy="184" r="18" fill="#0f7f3b"/>
   <circle cx="288" cy="184" r="18" fill="#074f27"/>
-  <path d="M704 304V662C704 751 648 807 554 807C467 807 407 763 386 687L496 647C505 683 524 704 557 704C591 704 611 681 611 640V304H704Z" fill="#19f56d"/>
   <path d="M287 404L391 512L287 620" fill="none" stroke="#19f56d" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="452" y="727" width="196" height="28" rx="14" fill="#19f56d"/>
+  <rect x="526" y="304" width="92" height="426" rx="18" fill="#19f56d"/>
+  <rect x="526" y="638" width="276" height="92" rx="18" fill="#19f56d"/>
+  <rect x="452" y="778" width="350" height="28" rx="14" fill="#19f56d" opacity=".74"/>
   <rect x="142" y="246" width="740" height="2" fill="#19f56d" opacity=".32"/>
 </svg>

@@ -1,8 +1,8 @@
 {
   "build": {
-    "appId": "com.jarvis.voice-automation",
-    "productName": "JARVIS",
-    "artifactName": "JARVIS-${version}-${os}-${arch}.${ext}",
+    "appId": "com.lexoire.voice-automation",
+    "productName": "LEXOIRE",
+    "artifactName": "LEXOIRE-${version}-${os}-${arch}.${ext}",
     "files": [
       "electron/**/*",
       "swift/JarvisSpeech",
@@ -29,9 +29,9 @@
       "icon": "electron/assets/icon.png",
       "category": "public.app-category.productivity",
       "extendInfo": {
-        "NSSpeechRecognitionUsageDescription": "JARVIS needs speech recognition access to transcribe your voice commands.",
-        "NSMicrophoneUsageDescription": "JARVIS needs microphone access to listen for your voice commands.",
-        "NSAudioCaptureUsageDescription": "JARVIS needs audio capture access to process your voice commands."
+        "NSSpeechRecognitionUsageDescription": "LEXOIRE needs speech recognition access to transcribe your voice commands.",
+        "NSMicrophoneUsageDescription": "LEXOIRE needs microphone access to listen for your voice commands.",
+        "NSAudioCaptureUsageDescription": "LEXOIRE needs audio capture access to process your voice commands."
       }
     },
     "win": {
@@ -51,12 +51,12 @@
       "maintainer": "yshady <yshady@users.noreply.github.com>"
     },
     "nsis": {
-      "artifactName": "JARVIS-${version}-${os}-${arch}-setup.${ext}",
+      "artifactName": "LEXOIRE-${version}-${os}-${arch}-setup.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     },
     "portable": {
-      "artifactName": "JARVIS-${version}-${os}-${arch}-portable.${ext}"
+      "artifactName": "LEXOIRE-${version}-${os}-${arch}-portable.${ext}"
     }
   }
 }

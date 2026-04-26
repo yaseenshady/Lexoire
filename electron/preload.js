@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('jarvis', {
   platform: process.platform,
   speak: (text) => ipcRenderer.invoke('tts:speak', text),
   stopSpeech: () => ipcRenderer.invoke('tts:stop'),
+  getVoiceCapabilities: () => ipcRenderer.invoke('voice:capabilities'),
   requestMic: () => ipcRenderer.invoke('mic:request'),
   startSpeech: () => ipcRenderer.invoke('speech:start'),
   stopSpeechRecognition: () => ipcRenderer.invoke('speech:stop'),

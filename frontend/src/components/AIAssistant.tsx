@@ -63,7 +63,7 @@ const AIAssistant: React.FC<AIAssistantProps> = ({
           transition={{ duration: 3, repeat: Infinity }}
         >
           <h1 className="text-4xl md:text-6xl font-bold bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-400 bg-clip-text text-transparent mb-2">
-            JARVIS
+            LEXOIRE
           </h1>
           <p className="text-sm md:text-base text-cyan-300/70 font-mono tracking-widest">
             AI SESSION ORCHESTRATOR

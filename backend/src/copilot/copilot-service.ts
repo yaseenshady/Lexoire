@@ -3,6 +3,22 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import type { CopilotCommand, CopilotResponse } from '../types';
 
+function resolveCopilotBinary(): string {
+  const candidates = [
+    process.env.COPILOT_COMMAND?.trim(),
+    '/opt/homebrew/bin/copilot',
+    '/usr/local/bin/copilot',
+    'copilot',
+  ].filter(Boolean) as string[];
+
+  for (const bin of candidates) {
+    if (bin.startsWith('/') && existsSync(bin)) return bin;
+    const res = spawnSync('which', [bin], { encoding: 'utf8' });
+    if (!res.error && res.status === 0 && res.stdout.trim()) return res.stdout.trim();
+  }
+  return candidates[candidates.length - 1];
+}
+
 const SESSION_FILE = resolve(process.cwd(), '.github', 'JARVIS_SESSION.md');
 const LEGACY_SESSION_FILE = resolve(__dirname, '../../..', '.github', 'JARVIS_SESSION.md');
 
@@ -65,7 +81,7 @@ class CopilotService {
   private masterSessionId: string | undefined;
   private sessionIdsByJarvisSession = new Map<string, string>();
 
-  constructor(private readonly commandBinary: string = process.env.COPILOT_COMMAND?.trim() || 'copilot') {
+  constructor(private readonly commandBinary: string = resolveCopilotBinary()) {
     this.masterSessionId = loadSessionId();
     if (this.masterSessionId) {
       console.log(`[CopilotService] Loaded master session: ${this.masterSessionId}`);
@@ -136,30 +152,32 @@ class CopilotService {
         try {
           const parsed = JSON.parse(trimmed) as {
             type?: string;
-            data?: { deltaContent?: string; content?: string };
+            data?: { deltaContent?: string; content?: string; message?: string; errorType?: string };
             sessionId?: string;
+            exitCode?: number;
           };
-          console.log(`[CopilotService] Parsed JSON type: ${parsed.type}`);
           if (parsed.type === 'assistant.message_delta' && parsed.data?.deltaContent) {
             streamedDelta = true;
             output += parsed.data.deltaContent;
-            console.log(`[CopilotService] Emitting message_delta: ${parsed.data.deltaContent.slice(0, 50)}`);
             onOutput(parsed.data.deltaContent, 'stdout');
             return;
           }
           if (parsed.type === 'assistant.message' && parsed.data?.content && !streamedDelta) {
             output += parsed.data.content;
-            console.log(`[CopilotService] Emitting message: ${parsed.data.content.slice(0, 50)}`);
             onOutput(parsed.data.content, 'stdout');
+            return;
+          }
+          if (parsed.type === 'session.error' && parsed.data?.message) {
+            const errMsg = `[Copilot error] ${parsed.data.message}`;
+            console.error(`[CopilotService] ${errMsg}`);
+            errorOutput += errMsg + '\n';
             return;
           }
           if (parsed.sessionId) {
             newSessionId = parsed.sessionId;
           }
         } catch (err) {
-          console.log(`[CopilotService] JSON parse failed, emitting raw line: ${trimmed.slice(0, 50)}`);
-          output += `${trimmed}\n`;
-          onOutput(`${trimmed}\n`, 'stdout');
+          console.log(`[CopilotService] Non-JSON line: ${trimmed.slice(0, 80)}`);
         }
       };
 
@@ -182,18 +200,21 @@ class CopilotService {
         this.currentProcess = null;
         if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
 
-        // Persist new session ID
-        if (newSessionId) {
+        if (code !== 0 || (errorOutput && !output.trim())) {
+          // Failed — clear stale session so next prompt starts fresh
+          console.warn(`[CopilotService] Prompt failed (exit ${code}), clearing session. Error: ${errorOutput.slice(0, 200)}`);
+          this.masterSessionId = undefined;
+          this.sessionIdsByJarvisSession.delete(jarvisSessionId);
+          ensureDir(SESSION_FILE);
+          writeFileSync(SESSION_FILE, '# JARVIS Master Session\n\nsession-id: (none — reset after failed prompt)\n');
+        } else if (newSessionId) {
           this.masterSessionId = newSessionId;
           this.sessionIdsByJarvisSession.set(jarvisSessionId, newSessionId);
           saveSessionId(newSessionId, command.prompt);
-          console.log(`[CopilotService] New session ID received and saved: ${newSessionId}`);
-        } else if (sessionId) {
+          console.log(`[CopilotService] Session saved: ${newSessionId}`);
+        } else if (sessionId && output.trim()) {
           this.sessionIdsByJarvisSession.set(jarvisSessionId, sessionId);
           saveSessionId(sessionId, command.prompt);
-          console.log(`[CopilotService] Session history updated: ${sessionId}`);
-        } else if (!newSessionId) {
-          console.log(`[CopilotService] ⚠️ No session ID extracted from Copilot response`);
         }
 
         resolve({

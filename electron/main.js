@@ -1,4 +1,5 @@
 const { app, BrowserWindow, Menu, session, systemPreferences, ipcMain } = require('electron');
+const { existsSync } = require('fs');
 const path = require('path');
 const http = require('http');
 const { spawn, exec, execFileSync, spawnSync } = require('child_process');
@@ -8,6 +9,27 @@ process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') throw err; 
 app.commandLine.appendSwitch('disable-http-cache');
 
 const JARVIS_PORT = 7337;
+const LEGACY_APP_PROFILE_CANDIDATES = ['jarvis-voice-automation', 'JARVIS'];
+const singleInstanceLock = app.requestSingleInstanceLock();
+
+if (!singleInstanceLock) {
+  app.exit(0);
+}
+
+function configureLegacyProfilePaths() {
+  if (!app.isPackaged) return;
+
+  const appDataPath = app.getPath('appData');
+  const legacyUserDataPath = LEGACY_APP_PROFILE_CANDIDATES
+    .map((name) => path.join(appDataPath, name))
+    .find((candidatePath) => existsSync(candidatePath))
+    || path.join(appDataPath, LEGACY_APP_PROFILE_CANDIDATES[0]);
+
+  app.setPath('userData', legacyUserDataPath);
+  app.setPath('sessionData', legacyUserDataPath);
+}
+
+configureLegacyProfilePaths();
 
 let mainWindow;
 let backendProcess;
@@ -53,7 +75,7 @@ function waitForBackend(port, maxWaitMs = 15000) {
             }
           } catch (_) {}
 
-          retry('Backend health probe did not return a valid JARVIS response');
+          retry('Backend health probe did not return a valid LEXOIRE response');
         });
       });
 
@@ -93,12 +115,12 @@ function cleanupStaleBackend(port) {
   for (const pid of pids) {
     if (!pid || pid === process.pid) continue;
     const command = getProcessCommand(pid);
-    const isJarvisBackend =
+    const isLexoireBackend =
       command.includes('backend/dist/server.js') ||
       command.includes(' dist/server.js') ||
-      (command.includes('JARVIS.app') && command.includes('server.js'));
-    if (!isJarvisBackend) continue;
-    console.log('Stopping stale JARVIS backend on port', port, 'pid', pid);
+      ((command.includes('JARVIS.app') || command.includes('LEXOIRE.app')) && command.includes('server.js'));
+    if (!isLexoireBackend) continue;
+    console.log('Stopping stale LEXOIRE backend on port', port, 'pid', pid);
     try {
       process.kill(pid, 'SIGTERM');
     } catch (_) {}
@@ -174,7 +196,7 @@ function createWindow(initialUrl) {
       preload: path.join(__dirname, 'preload.js'),
     },
     icon: path.join(__dirname, 'assets', 'icon.png'),
-    title: 'JARVIS',
+    title: 'LEXOIRE',
     show: false,
   };
 
@@ -203,11 +225,11 @@ function createWindow(initialUrl) {
 
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
-      label: 'JARVIS',
+      label: 'LEXOIRE',
       submenu: [
         { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => mainWindow && mainWindow.reload() },
         { type: 'separator' },
-        { label: 'Quit JARVIS', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
+        { label: 'Quit LEXOIRE', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
       ],
     },
     {
@@ -228,6 +250,14 @@ let sayProcess = null;
 const sayQueue = [];
 let activeUtterance = null;
 let stoppingSpeech = false;
+
+function getVoiceCapabilities() {
+  return {
+    platform: process.platform,
+    nativeSpeechRecognition: process.platform === 'darwin',
+    nativeTtsFallback: process.platform === 'darwin',
+  };
+}
 
 function pickVoice(mode = 'hifi') {
   if (process.platform !== 'darwin') return null;
@@ -314,6 +344,8 @@ ipcMain.handle('mic:request', async () => {
   if (process.platform !== 'darwin') return true;
   return systemPreferences.askForMediaAccess('microphone');
 });
+
+ipcMain.handle('voice:capabilities', async () => getVoiceCapabilities());
 
 // ── Native speech recognition via Swift SFSpeechRecognizer ───────────────
 let speechProcess = null;
@@ -425,13 +457,20 @@ app.on('ready', async () => {
     createWindow(`data:text/html;charset=utf-8,${encodeURIComponent(`
       <html><body style="margin:0;background:#050807;color:#d4ffe0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh">
         <div style="max-width:560px;padding:32px;border:1px solid rgba(16,255,80,.2);border-radius:18px;background:rgba(6,18,10,.88);box-shadow:0 20px 60px rgba(0,0,0,.35)">
-          <h1 style="margin:0 0 12px;font-size:28px;color:#10ff50">JARVIS backend unavailable</h1>
+          <h1 style="margin:0 0 12px;font-size:28px;color:#10ff50">LEXOIRE backend unavailable</h1>
           <p style="margin:0 0 10px;line-height:1.5">The local backend could not claim port ${JARVIS_PORT}, so voice commands and Copilot orchestration are unavailable.</p>
           <pre style="white-space:pre-wrap;color:#9fe7b0;background:#031108;padding:12px;border-radius:10px">${String(err.message || err)}</pre>
         </div>
       </body></html>
     `)}`);
   }
+});
+
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 });
 
 app.on('window-all-closed', () => {
