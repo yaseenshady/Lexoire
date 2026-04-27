@@ -10,20 +10,21 @@
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:backend": "npm --prefix backend run dev",
     "build": "npm run build:swift && npm run speech:model:prepare && npm --prefix frontend run build && npm --prefix backend run build",
+    "electron:prepare-backend": "node scripts/prepare-electron-backend.mjs",
     "start": "npm --prefix backend run start",
     "electron": "electron electron/main.js",
     "electron:dev": "npm run build && npm run electron",
-    "electron:build": "npm run build && electron-builder build --publish never",
-    "electron:build:mac": "npm run build && electron-builder build --mac --publish never --config.mac.identity=null",
-    "electron:build:win": "npm run build && electron-builder build --win --publish never",
-    "electron:build:linux": "npm run build && electron-builder build --linux --publish never",
-    "electron:build:all": "npm run build && electron-builder build --mac --win --linux --publish never --config.mac.identity=null",
-    "electron:release:mac": "npm run build && electron-builder --mac dmg zip --publish never --config.mac.identity=null",
-    "electron:release:win": "npm run build && electron-builder --win nsis portable --x64 --publish never",
-    "electron:release:linux": "npm run build && electron-builder --linux AppImage deb --x64 --publish never",
-    "electron:pack": "npm run build && electron-builder --dir --publish never",
-    "electron:pack:local": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir --publish never --config.mac.identity=null",
-    "electron:dist": "npm run build && electron-builder"
+    "electron:build": "npm run build && npm run electron:prepare-backend && electron-builder build --publish never",
+    "electron:build:mac": "npm run build && npm run electron:prepare-backend && electron-builder build --mac --publish never --config.mac.identity=null",
+    "electron:build:win": "npm run build && npm run electron:prepare-backend && electron-builder build --win --publish never",
+    "electron:build:linux": "npm run build && npm run electron:prepare-backend && electron-builder build --linux --publish never",
+    "electron:build:all": "npm run build && npm run electron:prepare-backend && electron-builder build --mac --win --linux --publish never --config.mac.identity=null",
+    "electron:release:mac": "npm run build && npm run electron:prepare-backend && electron-builder --mac dmg zip --publish never --config.mac.identity=null",
+    "electron:release:win": "npm run build && npm run electron:prepare-backend && electron-builder --win nsis portable --x64 --publish never",
+    "electron:release:linux": "npm run build && npm run electron:prepare-backend && electron-builder --linux AppImage deb --x64 --publish never",
+    "electron:pack": "npm run build && npm run electron:prepare-backend && electron-builder --dir --publish never",
+    "electron:pack:local": "npm run build && npm run electron:prepare-backend && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir --publish never --config.mac.identity=null",
+    "electron:dist": "npm run build && npm run electron:prepare-backend && electron-builder"
   },
   "keywords": [
     "lexoire",
@@ -42,16 +43,28 @@
     "artifactName": "LEXOIRE-${version}-${os}-${arch}.${ext}",
     "files": [
       "electron/**/*",
+      "!electron/node_modules/**/*",
+      "!electron/package.json",
       "swift/LexoireSpeech",
       "backend/dist/**/*",
       "backend/models/transformers/**/*",
       "backend/package.json",
-      "backend/node_modules/**/*",
+      {
+        "from": "electron/node_modules",
+        "to": "backend/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      },
       "frontend/dist/**/*",
       "node_modules/**/*"
     ],
     "asarUnpack": [
       "swift/LexoireSpeech",
+      "**/better-sqlite3/build/Release/**/*",
+      "**/onnxruntime-node/**/*",
+      "**/sharp/**/*",
+      "**/@img/**/*",
       "backend/node_modules/**/*.node",
       "backend/node_modules/**/*.dylib",
       "backend/node_modules/onnxruntime-node/**",
