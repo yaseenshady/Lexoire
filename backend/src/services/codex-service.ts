@@ -4,12 +4,14 @@ const CODEX_CLI = process.env.CODEX_COMMAND?.trim() ||
   '/Users/yshady/.npm-global/bin/codex';
 
 type Message = { role: 'user' | 'assistant'; content: string };
+type PromptResult = { text: string; aborted?: boolean };
 const conversationHistory = new Map<string, Message[]>();
-const sessionIds = new Map<string, string>(); // jarvisSessionId → codex session UUID
+const sessionIds = new Map<string, string>(); // workspaceSessionId → codex session UUID
 
 class CodexService {
   private currentProcess: ChildProcess | null = null;
   private running = false;
+  private abortRequested = false;
 
   isRunning() { return this.running; }
 
@@ -24,9 +26,8 @@ class CodexService {
 
   abort() {
     if (!this.currentProcess) return false;
+    this.abortRequested = true;
     this.currentProcess.kill('SIGTERM');
-    this.currentProcess = null;
-    this.running = false;
     return true;
   }
 
@@ -42,34 +43,38 @@ class CodexService {
     text: string,
     sessionId: string,
     onChunk: (chunk: string) => void
-  ): Promise<string> {
+  ): Promise<PromptResult> {
     this.running = true;
+    this.abortRequested = false;
     const history = conversationHistory.get(sessionId) ?? [];
     history.push({ role: 'user', content: text });
 
-    let full = '';
+    let result: PromptResult = { text: '' };
     try {
       const cliSession = sessionIds.get(sessionId);
       if (cliSession) {
-        full = await this.execResume(cliSession, text, sessionId, onChunk);
+        result = await this.execResume(cliSession, text, sessionId, onChunk);
       } else {
-        full = await this.execNew(text, sessionId, onChunk);
+        result = await this.execNew(text, sessionId, onChunk);
       }
-      history.push({ role: 'assistant', content: full });
-      conversationHistory.set(sessionId, history.slice(-40));
+      if (!result.aborted) {
+        history.push({ role: 'assistant', content: result.text });
+        conversationHistory.set(sessionId, history.slice(-40));
+      }
     } catch (err) {
       throw err;
     } finally {
       this.running = false;
+      this.abortRequested = false;
     }
-    return full;
+    return result;
   }
 
   private execNew(
     text: string,
     sessionId: string,
     onChunk: (chunk: string) => void
-  ): Promise<string> {
+  ): Promise<PromptResult> {
     const args = [
       'exec',
       '--dangerously-bypass-approvals-and-sandbox',
@@ -85,7 +90,7 @@ class CodexService {
     text: string,
     sessionId: string,
     onChunk: (chunk: string) => void
-  ): Promise<string> {
+  ): Promise<PromptResult> {
     const args = [
       'exec', 'resume',
       cliSessionId,
@@ -101,7 +106,7 @@ class CodexService {
     args: string[],
     sessionId: string,
     onChunk: (chunk: string) => void
-  ): Promise<string> {
+  ): Promise<PromptResult> {
     return new Promise((resolve, reject) => {
       console.log(`[Codex CLI] ${CODEX_CLI} ${args.slice(0, -1).join(' ')} [prompt]`);
 
@@ -176,16 +181,28 @@ class CodexService {
       this.currentProcess.on('close', (code) => {
         this.currentProcess = null;
         if (buf.trim()) handleLine(buf);
+        const wasAborted = this.abortRequested;
+        this.abortRequested = false;
+        if (wasAborted) {
+          resolve({ text: full.trim(), aborted: true });
+          return;
+        }
         if (code !== 0 && !full) {
           const message = errorBuffer.trim() || `codex exited with code ${code}`;
           reject(new Error(message));
         } else {
-          resolve(full.trim());
+          resolve({ text: full.trim() });
         }
       });
 
       this.currentProcess.on('error', (err) => {
         this.currentProcess = null;
+        const wasAborted = this.abortRequested;
+        this.abortRequested = false;
+        if (wasAborted) {
+          resolve({ text: full.trim(), aborted: true });
+          return;
+        }
         reject(err);
       });
     });

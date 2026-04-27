@@ -2,7 +2,7 @@
 
 ## Overview
 
-The new multi-session UI components provide a sophisticated dashboard layout for managing multiple JARVIS sessions. This layout structure allows users to view, switch between, and manage multiple concurrent orchestrator sessions with visual status indicators and smooth animations.
+The new multi-session UI components provide a sophisticated dashboard layout for managing multiple Lexoire sessions. This layout structure allows users to view, switch between, and manage multiple concurrent orchestrator sessions with visual status indicators and smooth animations.
 
 ## Components Created
 
@@ -348,4 +348,4 @@ All components:
 
 ## Conclusion
 
-The new multi-session UI dashboard provides a professional, responsive interface for managing multiple JARVIS orchestration sessions. The modular component design allows for flexible integration with existing application components while maintaining consistent styling and animations throughout the application.
+The new multi-session UI dashboard provides a professional, responsive interface for managing multiple Lexoire orchestration sessions. The modular component design allows for flexible integration with existing application components while maintaining consistent styling and animations throughout the application.

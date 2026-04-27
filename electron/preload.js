@@ -13,8 +13,8 @@ contextBridge.exposeInMainWorld('api', {
   },
 });
 
-// JARVIS native bridge. Browser APIs are preferred in the UI; these are fallbacks.
-contextBridge.exposeInMainWorld('jarvis', {
+// Lexoire native bridge. Browser APIs are preferred in the UI; these are fallbacks.
+contextBridge.exposeInMainWorld('lexoire', {
   platform: process.platform,
   speak: (text) => ipcRenderer.invoke('tts:speak', text),
   stopSpeech: () => ipcRenderer.invoke('tts:stop'),

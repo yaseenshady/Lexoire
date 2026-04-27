@@ -10,7 +10,7 @@ interface Session {
   mdFolder: string;
 }
 
-const SESSIONS_DIR = path.resolve(process.cwd(), 'JARVIS_SESSIONS');
+const SESSIONS_DIR = path.resolve(process.cwd(), 'LEXOIRE_SESSIONS');
 const SESSIONS_INDEX = path.join(SESSIONS_DIR, '.sessions.json');
 
 export class SessionManager {

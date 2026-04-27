@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lexoire News | Launch</title>
+  <meta
+    name="description"
+    content="Lexoire launch news for the open-source voice coding control surface."
+  />
+  <link rel="icon" href="./icon.png" />
+  <link rel="stylesheet" href="./assets/styles.css" />
+</head>
+<body>
+  <div class="docs-readability-overlay" aria-hidden="true"></div>
+  <canvas class="matrix-canvas" data-matrix-canvas aria-hidden="true"></canvas>
+  <canvas class="flow-canvas" data-flow-canvas aria-hidden="true"></canvas>
+  <div class="sphere-focus" aria-hidden="true"></div>
+  <div class="cursor-glow" data-cursor-glow aria-hidden="true"></div>
+  <div class="cursor-reticle" data-cursor-reticle aria-hidden="true"></div>
+  <div class="crt-noise" aria-hidden="true"></div>
+  <div class="vertical-energy-bar" aria-hidden="true"></div>
+  <div class="scan-sweep" aria-hidden="true"></div>
+
+  <nav class="site-nav" data-site-nav>
+    <a class="brand" href="./index.html" aria-label="Lexoire home">
+      <span class="brand__mark">L</span>
+      <span class="brand__name">LEXOIRE</span>
+    </a>
+
+    <button class="nav-toggle" type="button" data-nav-toggle aria-label="Toggle navigation">
+      MENU
+    </button>
+
+    <div class="site-nav__links">
+      <a href="./index.html">Home</a>
+      <a href="./index.html#install">Install</a>
+      <a href="./developer-docs.html">Docs</a>
+      <a class="active" href="./news.html">News</a>
+    </div>
+  </nav>
+
+  <header class="news-hero">
+    <p class="eyebrow terminal-reveal">LEXOIRE NEWSWIRE</p>
+    <h1 class="distort-heading terminal-reveal">Launch.</h1>
+    <p class="hero-copy terminal-reveal">
+      One launch note for the first public release of Lexoire as an open-source voice coding control surface.
+    </p>
+  </header>
+
+  <main class="news-layout">
+    <aside class="news-index terminal-reveal" aria-label="News signal index">
+      <p class="news-index__label">Signal index</p>
+      <a href="#launch" data-center-link>Launch</a>
+    </aside>
+
+    <section class="news-feed" aria-label="Lexoire news posts">
+      <article class="news-post terminal-reveal" id="launch" data-center-article>
+        <div class="news-post__meta">
+          <span>Launch</span>
+          <time datetime="2026-04-26">Apr 26, 2026</time>
+        </div>
+        <h2>
+          <a class="news-title-link" href="./news-launch.html">
+            Lexoire is now available as an open-source voice-first control surface for coding tools.
+          </a>
+        </h2>
+        <p>
+          The launch release focuses Lexoire on voice-first coding control, visible session routing, durable context,
+          and a cleaner public repo that is ready to install, inspect, and extend.
+        </p>
+        <div class="news-tags" aria-label="Post tags">
+          <span>open source</span>
+          <span>voice control</span>
+          <span>sessions</span>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <footer class="terminal-footer">
+    <span>LEXOIRE NEWS</span>
+    <span><a href="https://github.com/yaseensh/Lexoire" target="_blank" rel="noreferrer">REPOSITORY</a></span>
+    <span><span data-current-year></span></span>
+  </footer>
+
+  <script src="./assets/site.js"></script>
+</body>
+</html>

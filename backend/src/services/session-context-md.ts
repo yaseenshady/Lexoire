@@ -5,7 +5,7 @@ import type { Session } from '../types';
 export type ProviderName = 'copilot' | 'claude' | 'codex';
 
 function getRootDir(session: Session) {
-  return path.join(session.repoPath || process.cwd(), '.github', 'jarvis-sessions');
+  return path.join(session.repoPath || process.cwd(), '.github', 'lexoire-sessions');
 }
 
 function getIndexFile(session: Session) {
@@ -41,7 +41,7 @@ function upsertIndex(session: Session, contextPath: string) {
   const entry = `- [${session.name}](${relativePath}) - \`${session.id}\` - ${session.status}`;
   const existing = existsSync(indexFile)
     ? readFileSync(indexFile, 'utf8')
-    : '# JARVIS Session Context Index\n\n';
+    : '# LEXOIRE Session Context Index\n\n';
   const lines = existing.split('\n').filter((line) => !line.includes(`\`${session.id}\``));
   lines.push(entry);
   writeFileSync(indexFile, `${lines.join('\n').trim()}\n`);
@@ -53,7 +53,7 @@ export function ensureSessionContext(session: Session): string {
     writeFileSync(contextPath, [
       `# ${session.name}`,
       '',
-      `JARVIS session id: \`${session.id}\``,
+      `LEXOIRE session id: \`${session.id}\``,
       `Repository: \`${session.repoPath}\``,
       `Branch: \`${session.branch || 'unknown'}\``,
       `Status: \`${session.status}\``,
@@ -84,7 +84,7 @@ export function ensureSessionContext(session: Session): string {
 export function buildProviderPrompt(session: Session, provider: ProviderName, prompt: string): string {
   const contextPath = ensureSessionContext(session);
   return [
-    `JARVIS workspace session id: ${session.id}`,
+    `LEXOIRE workspace session id: ${session.id}`,
     `Active provider: ${provider}`,
     `Repository path: ${session.repoPath}`,
     `Central context markdown: ${contextPath}`,

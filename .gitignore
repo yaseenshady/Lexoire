@@ -12,10 +12,16 @@ build/
 .env
 .env.local
 .env.*.local
+.claude/
 
 # Database
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 
 # Logs
 logs/
@@ -44,3 +50,16 @@ coverage/
 # Misc
 .cache/
 .temp/
+.completion_report.md
+.github/JARVIS_SESSION.md
+.github/jarvis-sessions/
+.github/LEXOIRE_SESSION.md
+.github/lexoire-sessions/
+backend/.github/JARVIS_SESSION.md
+backend/.github/jarvis-sessions/
+backend/.github/LEXOIRE_SESSION.md
+backend/.github/lexoire-sessions/
+JARVIS_SESSIONS/
+LEXOIRE_SESSIONS/
+swift/JarvisSpeech
+swift/LexoireSpeech

@@ -8,28 +8,28 @@ const { spawn, exec, execFileSync, spawnSync } = require('child_process');
 process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') throw err; });
 app.commandLine.appendSwitch('disable-http-cache');
 
-const JARVIS_PORT = 7337;
-const LEGACY_APP_PROFILE_CANDIDATES = ['jarvis-voice-automation', 'JARVIS'];
+const LEXOIRE_PORT = 7337;
+const APP_PROFILE_CANDIDATES = ['lexoire-voice-automation', 'LEXOIRE'];
 const singleInstanceLock = app.requestSingleInstanceLock();
 
 if (!singleInstanceLock) {
   app.exit(0);
 }
 
-function configureLegacyProfilePaths() {
+function configureProfilePaths() {
   if (!app.isPackaged) return;
 
   const appDataPath = app.getPath('appData');
-  const legacyUserDataPath = LEGACY_APP_PROFILE_CANDIDATES
+  const userDataPath = APP_PROFILE_CANDIDATES
     .map((name) => path.join(appDataPath, name))
     .find((candidatePath) => existsSync(candidatePath))
-    || path.join(appDataPath, LEGACY_APP_PROFILE_CANDIDATES[0]);
+    || path.join(appDataPath, APP_PROFILE_CANDIDATES[0]);
 
-  app.setPath('userData', legacyUserDataPath);
-  app.setPath('sessionData', legacyUserDataPath);
+  app.setPath('userData', userDataPath);
+  app.setPath('sessionData', userDataPath);
 }
 
-configureLegacyProfilePaths();
+configureProfilePaths();
 
 let mainWindow;
 let backendProcess;
@@ -118,7 +118,7 @@ function cleanupStaleBackend(port) {
     const isLexoireBackend =
       command.includes('backend/dist/server.js') ||
       command.includes(' dist/server.js') ||
-      ((command.includes('JARVIS.app') || command.includes('LEXOIRE.app')) && command.includes('server.js'));
+      (command.includes('LEXOIRE.app') && command.includes('server.js'));
     if (!isLexoireBackend) continue;
     console.log('Stopping stale LEXOIRE backend on port', port, 'pid', pid);
     try {
@@ -131,14 +131,55 @@ function cleanupStaleBackend(port) {
   }
 }
 
+function listManagedSpeechProcesses() {
+  try {
+    const output = execFileSync('ps', ['-ax', '-o', 'pid=,command='], { encoding: 'utf8' });
+    return output
+      .split('\n')
+      .map((line) => line.match(/^\s*(\d+)\s+(.*)$/))
+      .filter((match) => Boolean(match))
+      .map((match) => ({
+        pid: Number.parseInt(match[1], 10),
+        command: match[2],
+      }))
+      .filter(({ pid, command }) =>
+        Number.isInteger(pid)
+        && command.includes('LexoireSpeech')
+        && (
+          command.includes('LEXOIRE.app')
+          || command.includes(path.join('swift', 'LexoireSpeech'))
+        ));
+  } catch (_) {
+    return [];
+  }
+}
+
+function cleanupStaleSpeechProcesses(exceptPid) {
+  const speechProcesses = listManagedSpeechProcesses();
+  let stoppedAny = false;
+
+  for (const { pid, command } of speechProcesses) {
+    if (!pid || pid === exceptPid) continue;
+    console.log('Stopping stale speech recognizer pid', pid, command);
+    try {
+      process.kill(pid, 'SIGTERM');
+      stoppedAny = true;
+    } catch (_) {}
+  }
+
+  if (stoppedAny) {
+    spawnSync('sleep', ['1']);
+  }
+}
+
 function getBackendRuntime() {
   const env = {
     ...process.env,
-    PORT: String(JARVIS_PORT),
-    JARVIS_STRICT_PORT: '1',
+    PORT: String(LEXOIRE_PORT),
+    LEXOIRE_STRICT_PORT: '1',
     NODE_ENV: 'production',
     DB_PATH: app.isPackaged
-      ? path.join(app.getPath('userData'), 'jarvis.db')
+      ? path.join(app.getPath('userData'), 'lexoire.db')
       : (process.env.DB_PATH || ''),
   };
 
@@ -161,8 +202,8 @@ function startBackend() {
   const backendPath = path.join(resourcesPath, 'backend', 'dist', 'server.js');
   const backendCwd = app.isPackaged ? app.getPath('userData') : path.join(resourcesPath, 'backend');
   const runtime = getBackendRuntime();
-  cleanupStaleBackend(JARVIS_PORT);
-  console.log('Starting backend:', backendPath, 'on port', JARVIS_PORT);
+  cleanupStaleBackend(LEXOIRE_PORT);
+  console.log('Starting backend:', backendPath, 'on port', LEXOIRE_PORT);
 
   backendProcess = spawn(runtime.command, [...runtime.args, backendPath], {
     env: runtime.env,
@@ -179,7 +220,7 @@ function startBackend() {
   process.stdout.on('error', (err) => { if (err.code !== 'EPIPE') throw err; });
   process.stderr.on('error', (err) => { if (err.code !== 'EPIPE') throw err; });
 
-  return waitForBackend(JARVIS_PORT);
+  return waitForBackend(LEXOIRE_PORT);
 }
 
 function createWindow(initialUrl) {
@@ -210,7 +251,7 @@ function createWindow(initialUrl) {
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
 
-  const url = initialUrl || ('http://127.0.0.1:' + JARVIS_PORT);
+  const url = initialUrl || ('http://127.0.0.1:' + LEXOIRE_PORT);
   console.log('Loading:', url);
   mainWindow.loadURL(url);
 
@@ -265,6 +306,17 @@ const sayQueue = [];
 let activeUtterance = null;
 let stoppingSpeech = false;
 
+function stopSpeechOutput() {
+  while (sayQueue.length > 0) {
+    const queued = sayQueue.shift();
+    queued?.resolve(false);
+  }
+  if (sayProcess) {
+    stoppingSpeech = true;
+    try { sayProcess.kill('SIGTERM'); } catch (_) {}
+  }
+}
+
 function getVoiceCapabilities() {
   return {
     platform: process.platform,
@@ -275,7 +327,7 @@ function getVoiceCapabilities() {
 
 function pickVoice(mode = 'hifi') {
   if (process.platform !== 'darwin') return null;
-  const envVoice = process.env.JARVIS_VOICE?.trim();
+  const envVoice = process.env.LEXOIRE_VOICE?.trim();
   const preferred = envVoice
     ? [envVoice]
     : mode === 'classic'
@@ -344,14 +396,7 @@ ipcMain.handle('tts:speak', async (_, payload) => {
 });
 
 ipcMain.handle('tts:stop', async () => {
-  while (sayQueue.length > 0) {
-    const queued = sayQueue.shift();
-    queued?.resolve(false);
-  }
-  if (sayProcess) {
-    stoppingSpeech = true;
-    try { sayProcess.kill('SIGTERM'); } catch (_) {}
-  }
+  stopSpeechOutput();
 });
 
 ipcMain.handle('mic:request', async () => {
@@ -367,10 +412,10 @@ let speechEnabled = false;
 
 function getSpeechBinaryPath() {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'app.asar.unpacked', 'swift', 'JarvisSpeech');
+    return path.join(process.resourcesPath, 'app.asar.unpacked', 'swift', 'LexoireSpeech');
   }
 
-  return path.join(__dirname, '..', 'swift', 'JarvisSpeech');
+  return path.join(__dirname, '..', 'swift', 'LexoireSpeech');
 }
 
 function startSpeechProcess() {
@@ -383,6 +428,7 @@ function startSpeechProcess() {
   }
 
   if (speechProcess) return;
+  cleanupStaleSpeechProcesses();
   try {
     const speechBinaryPath = getSpeechBinaryPath();
     speechProcess = spawn(speechBinaryPath, [], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -402,14 +448,14 @@ function startSpeechProcess() {
     for (const line of lines) {
       const t = line.trim();
       if (!t) continue;
-      if (t === 'JARVIS_READY') {
+      if (t === 'LEXOIRE_READY') {
         mainWindow?.webContents.send('speech:event', { type: 'ready' });
-      } else if (t.startsWith('JARVIS_INTERIM:')) {
-        mainWindow?.webContents.send('speech:event', { type: 'interim', text: t.slice(15) });
-      } else if (t.startsWith('JARVIS_FINAL:')) {
-        mainWindow?.webContents.send('speech:event', { type: 'final', text: t.slice(13) });
-      } else if (t.startsWith('JARVIS_ERROR:')) {
-        const errorText = t.slice(13);
+      } else if (t.startsWith('LEXOIRE_INTERIM:')) {
+        mainWindow?.webContents.send('speech:event', { type: 'interim', text: t.slice(17) });
+      } else if (t.startsWith('LEXOIRE_FINAL:')) {
+        mainWindow?.webContents.send('speech:event', { type: 'final', text: t.slice(15) });
+      } else if (t.startsWith('LEXOIRE_ERROR:')) {
+        const errorText = t.slice(15);
         if (/denied|notDetermined|restricted|permission|privacy/i.test(errorText)) {
           speechEnabled = false;
         }
@@ -431,14 +477,30 @@ function startSpeechProcess() {
   });
 }
 
+function stopSpeechProcess() {
+  speechEnabled = false;
+  if (speechProcess) {
+    try { speechProcess.kill('SIGTERM'); } catch (_) {}
+    speechProcess = null;
+  }
+}
+
+function shutdownChildProcesses() {
+  stopSpeechProcess();
+  stopSpeechOutput();
+  if (backendProcess) {
+    try { backendProcess.kill('SIGTERM'); } catch (_) {}
+    backendProcess = null;
+  }
+}
+
 ipcMain.handle('speech:start', () => {
   speechEnabled = true;
   startSpeechProcess();
 });
 
 ipcMain.handle('speech:stop', () => {
-  speechEnabled = false;
-  if (speechProcess) { try { speechProcess.kill(); } catch (_) {} speechProcess = null; }
+  stopSpeechProcess();
 });
 
 app.on('ready', async () => {
@@ -472,7 +534,7 @@ app.on('ready', async () => {
       <html><body style="margin:0;background:#050807;color:#d4ffe0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh">
         <div style="max-width:560px;padding:32px;border:1px solid rgba(16,255,80,.2);border-radius:18px;background:rgba(6,18,10,.88);box-shadow:0 20px 60px rgba(0,0,0,.35)">
           <h1 style="margin:0 0 12px;font-size:28px;color:#10ff50">LEXOIRE backend unavailable</h1>
-          <p style="margin:0 0 10px;line-height:1.5">The local backend could not claim port ${JARVIS_PORT}, so voice commands and Copilot orchestration are unavailable.</p>
+          <p style="margin:0 0 10px;line-height:1.5">The local backend could not claim port ${LEXOIRE_PORT}, so voice commands and Copilot orchestration are unavailable.</p>
           <pre style="white-space:pre-wrap;color:#9fe7b0;background:#031108;padding:12px;border-radius:10px">${String(err.message || err)}</pre>
         </div>
       </body></html>
@@ -487,8 +549,12 @@ app.on('second-instance', () => {
   mainWindow.focus();
 });
 
+app.on('before-quit', () => {
+  shutdownChildProcesses();
+});
+
 app.on('window-all-closed', () => {
-  if (backendProcess) backendProcess.kill();
+  shutdownChildProcesses();
   app.quit();
 });
 
@@ -498,6 +564,6 @@ app.on('activate', () => {
     mainWindow.focus();
   } else {
     // Backend is already running; just open the window
-    createWindow('http://127.0.0.1:' + JARVIS_PORT);
+    createWindow('http://127.0.0.1:' + LEXOIRE_PORT);
   }
 });

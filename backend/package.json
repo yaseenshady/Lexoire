@@ -9,8 +9,8 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "description": "",
+  "license": "MIT",
+  "description": "Lexoire backend",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
     "better-sqlite3": "^12.9.0",

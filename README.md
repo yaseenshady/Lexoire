@@ -1,110 +1,111 @@
-# JARVIS
+# Lexoire
 
-JARVIS is now a **single local workspace** for voice-driven Copilot automation:
+Lexoire is a local-first desktop workspace for voice-driven GitHub Copilot automation.
 
-- **Frontend**: React + Vite control surface for voice input, command entry, terminal output, memories, and execution plans.
-- **Backend**: Express + Socket.IO runtime that executes the Copilot CLI, persists conversations in SQLite, derives searchable memories, and serves the production frontend bundle.
-- **Persistence**: SQLite stores conversations, generated memories, and the latest execution plan so the app can restore context on reload.
+- **Frontend**: React + Vite interface for voice input, queued prompts, streaming responses, and workspace context
+- **Backend**: Express + Socket.IO runtime for Copilot orchestration, persistence, and provider integrations
+- **Desktop shell**: Electron app with native speech recognition and system TTS on macOS
+- **Persistence**: SQLite-backed conversations, memories, and execution-plan state
 
-## Public website and docs
+## Highlights
 
-- **Site source**: `website/`
-- **Landing page**: `website/index.html`
-- **Developer docs**: `website/developer-docs.html`
-- **Free hosting**: GitHub Pages via `.github/workflows/deploy-website.yml`
+- Voice and text command entry
+- Streaming assistant responses
+- Multi-provider orchestration for Copilot, Claude, and Codex
+- Local persistence for sessions, memories, and project state
+- Desktop packaging with Electron
 
-## Architecture
+## Requirements
 
-### Frontend
+- **Node.js** 22+
+- **npm** 10+
+- A working **GitHub Copilot CLI** install (`copilot`) authenticated for local use
+- **macOS** for the full packaged desktop speech experience
+- A Chromium-based browser for the best browser speech API support in development
 
-- Connects to the app endpoint from settings or `VITE_API_URL`
-- Uses the same origin by default, so Vite proxying works cleanly in development and the backend-served bundle works in production
-- Hydrates from `/api/app-state` on load
-- Streams command output over Socket.IO
-- Syncs the active conversation back to the backend when conversation memory is enabled
-
-### Backend
-
-- Exposes:
-  - `GET /api/health`
-  - `GET /api/app-state`
-  - `GET /api/conversations`
-  - `GET /api/conversations/:id`
-  - `GET /api/memories`
-  - `GET /api/project-plan`
-  - `POST /api/speak`
-- Stores every synced conversation and regenerates memory entries from recent user/assistant messages
-- Tracks the latest execution pipeline as a project plan with step status
-- Serves `frontend/dist` after a production build, so `npm start` is a unified app entry
-
-## How memory works
-
-1. The frontend keeps the active conversation in state.
-2. When **Sync conversation memory** is enabled, that conversation is sent to the backend over Socket.IO.
-3. The backend stores the full conversation in SQLite.
-4. It then derives memory rows from recent non-system messages, tags them, scores importance, and makes them searchable in the Memories view and `/api/memories`.
-
-## How command execution works
-
-1. A text or voice prompt is submitted from the frontend.
-2. The backend starts the configured Copilot CLI command (`COPILOT_COMMAND`, default `copilot`).
-3. Output streams back live through Socket.IO into the terminal panel.
-4. The backend stores an execution plan with dispatch, stream, and finalize steps.
-5. When the command completes, the frontend refreshes app state so memories, runtime counts, and the project plan stay current.
-
-## Local development
-
-### 1. Install dependencies
+## Quick start
 
 ```bash
 npm run install:all
-```
-
-### 2. Start the workspace
-
-```bash
 npm run dev
 ```
 
-This runs:
+That starts:
 
-- **Frontend**: `http://localhost:3000`
-- **Backend**: `http://localhost:5000`
+- Frontend: `http://localhost:3000`
+- Backend: `http://localhost:5000`
 
-Vite proxies `/api` and `/socket.io` to the backend, so the browser can stay on the frontend origin.
+For a packaged local desktop build:
 
-## Production-style local run
+```bash
+npm run electron:pack:local
+```
+
+## Build and run
+
+Production-style local run:
 
 ```bash
 npm run build
 npm start
 ```
 
-After the build, the backend serves the compiled frontend bundle and the API from the same process.
+Electron desktop app in development:
+
+```bash
+npm run electron:dev
+```
 
 ## Configuration
 
-Backend config lives in `backend/.env`:
+Copy and edit the example files if needed:
 
-```env
-PORT=5000
-NODE_ENV=development
-DB_PATH=./jarvis.db
-FRONTEND_ORIGIN=http://localhost:3000
-COPILOT_COMMAND=copilot
+- `backend/.env.example`
+- `frontend/.env.example`
+
+Important backend settings:
+
+- `PORT`
+- `DB_PATH`
+- `FRONTEND_ORIGIN`
+- `COPILOT_COMMAND`
+
+Optional frontend setting:
+
+- `VITE_API_URL`
+
+## Project structure
+
+```text
+frontend/   React + Vite UI
+backend/    Express + Socket.IO runtime
+electron/   Desktop shell and native integrations
+shared/     Shared TypeScript types
+swift/      Native macOS speech-recognition helper
+website/    Public website and docs site
+docs/       Contributor and release documentation
 ```
 
-Frontend config can use `VITE_API_URL` if you need to point the UI at a different app origin.
+## Documentation
 
-## Key files
+- `docs/getting-started.md`
+- `docs/development.md`
+- `docs/architecture.md`
+- `CHANGELOG.md`
+- `SECURITY.md`
 
-- `frontend/src/App.tsx` - main dashboard state and socket orchestration
-- `frontend/src/services/api.ts` - app-state bootstrap helpers
-- `backend/src/server.ts` - API, Socket.IO, runtime wiring, and production static serving
-- `backend/src/db/database.ts` - SQLite persistence for conversations, memories, and plans
-- `backend/src/copilot/copilot-service.ts` - Copilot CLI execution and availability checks
+## Website deployment
 
-## Notes
+The public site lives in `website/` and is published with `.github/workflows/deploy-site.yml`.
 
-- Voice recognition still depends on browser support, so Chrome/Edge remain the best local demo browsers.
-- If the backend says the Copilot CLI is unavailable, update `COPILOT_COMMAND` or install/authenticate the CLI before running commands.
+For public deploys, keep download links pointed at the GitHub Releases page unless the exact asset names for the current release are confirmed.
+
+## Open-source release notes
+
+Lexoire is released under the **MIT License**.
+
+If you want to publish a true open-source release, keep the license commercially usable. Noncommercial restrictions are **not** open source under the OSI definition.
+
+## Contributing
+
+See `CONTRIBUTING.md` for development workflow, pull request expectations, and validation guidance.

@@ -1,14 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 
-interface JarvisSphereProps {
+interface LexoireSphereProps {
   state?: 'idle' | 'thinking' | 'success' | 'error';
   size?: number;
   accent?: 'cyan' | 'blue' | 'violet' | 'amber';
   className?: string;
 }
 
-const JarvisSphere: React.FC<JarvisSphereProps> = ({
+const LexoireSphere: React.FC<LexoireSphereProps> = ({
   state = 'idle',
   size = 240,
   accent = 'cyan',
@@ -433,4 +433,4 @@ const JarvisSphere: React.FC<JarvisSphereProps> = ({
   );
 };
 
-export default JarvisSphere;
+export default LexoireSphere;

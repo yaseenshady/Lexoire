@@ -5,7 +5,7 @@
     "artifactName": "LEXOIRE-${version}-${os}-${arch}.${ext}",
     "files": [
       "electron/**/*",
-      "swift/JarvisSpeech",
+      "swift/LexoireSpeech",
       "backend/dist/**/*",
       "backend/package.json",
       "backend/node_modules/**/*",
@@ -14,7 +14,7 @@
       "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme,LICENSE,license,LIC}"
     ],
     "asarUnpack": [
-      "swift/JarvisSpeech",
+      "swift/LexoireSpeech",
       "backend/node_modules/**/*.node",
       "node_modules/**/*.node"
     ],

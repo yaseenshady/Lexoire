@@ -1,8 +1,42 @@
+const initialMouseX = window.innerWidth / 2;
+const initialMouseY = window.innerHeight / 2;
+
 const state = {
   scroll: 0,
   scrollVelocity: 0,
-  mouseX: window.innerWidth / 2,
-  mouseY: window.innerHeight / 2,
+  targetScrollVelocity: 0,
+  mouseX: initialMouseX,
+  mouseY: initialMouseY,
+  targetMouseX: initialMouseX,
+  targetMouseY: initialMouseY,
+  visible: true,
+  reducedMotion: false,
+};
+
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+const readMotionPreference = () => {
+  const query = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+  return Boolean(query?.matches);
+};
+
+const getAnimationProfile = () => {
+  const width = window.innerWidth;
+  const dpr = window.devicePixelRatio || 1;
+
+  if (state.reducedMotion) {
+    return { dpr: 1, matrixFps: 0, flowFps: 0, sphereDots: 0, particles: 0, circuits: 0, gridStep: 84 };
+  }
+
+  if (width < 640) {
+    return { dpr: 1, matrixFps: 16, flowFps: 30, sphereDots: 520, particles: 22, circuits: 5, gridStep: 72 };
+  }
+
+  if (width < 1024) {
+    return { dpr: Math.min(dpr, 1.1), matrixFps: 20, flowFps: 40, sphereDots: 900, particles: 42, circuits: 8, gridStep: 62 };
+  }
+
+  return { dpr: Math.min(dpr, 1.35), matrixFps: 24, flowFps: 60, sphereDots: 1500, particles: 72, circuits: 12, gridStep: 56 };
 };
 
 const setCurrentYear = () => {
@@ -84,26 +118,145 @@ const setupReveal = () => {
   elements.forEach((element) => observer.observe(element));
 };
 
+const setupCenteredArticleLinks = () => {
+  const links = Array.from(document.querySelectorAll("[data-center-link]"));
+  const articles = Array.from(document.querySelectorAll("[data-center-article]"));
+  if (!links.length || !articles.length) return;
+
+  const focusArticle = (target) => {
+    articles.forEach((article) => {
+      article.classList.toggle("is-focused", article === target);
+    });
+  };
+
+  const scrollToArticle = (hash, updateHistory = true) => {
+    if (!hash || hash === "#") return false;
+
+    const id = decodeURIComponent(hash.slice(1));
+    const target = document.getElementById(id);
+    if (!target?.matches("[data-center-article]")) return false;
+
+    target.classList.add("is-visible");
+    focusArticle(target);
+    target.scrollIntoView({
+      behavior: state.reducedMotion ? "auto" : "smooth",
+      block: "center",
+      inline: "nearest",
+    });
+
+    if (updateHistory && window.location.hash !== hash) {
+      window.history.pushState(null, "", hash);
+    }
+
+    return true;
+  };
+
+  links.forEach((link) => {
+    link.addEventListener("click", (event) => {
+      const hash = link.getAttribute("href");
+      if (!hash?.startsWith("#")) return;
+      if (scrollToArticle(hash)) event.preventDefault();
+    });
+  });
+
+  window.addEventListener("hashchange", () => {
+    scrollToArticle(window.location.hash, false);
+  });
+
+  if (window.location.hash) {
+    window.setTimeout(() => scrollToArticle(window.location.hash, false), 80);
+  }
+};
+
+const setupArticleLaunchLinks = () => {
+  const links = Array.from(document.querySelectorAll(".news-title-link[href$='.html']"));
+  if (!links.length) return;
+
+  links.forEach((link) => {
+    link.addEventListener("click", (event) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
+        return;
+      }
+
+      event.preventDefault();
+      link.classList.add("is-launching");
+      link.closest(".news-post")?.classList.add("is-launching");
+
+      window.setTimeout(() => {
+        window.location.href = link.href;
+      }, state.reducedMotion ? 0 : 160);
+    });
+  });
+};
+
+const setupVisibility = () => {
+  const syncVisibility = () => {
+    state.visible = !document.hidden;
+  };
+
+  document.addEventListener("visibilitychange", syncVisibility);
+  syncVisibility();
+};
+
 const setupMouseGlow = () => {
+  if (state.reducedMotion) return;
+
+  const root = document.documentElement;
+  let frame = 0;
+
+  const syncMouse = () => {
+    frame = 0;
+    if (!state.visible) return;
+
+    state.mouseX += (state.targetMouseX - state.mouseX) * 0.18;
+    state.mouseY += (state.targetMouseY - state.mouseY) * 0.18;
+    root.style.setProperty("--mouse-x", `${state.mouseX.toFixed(1)}px`);
+    root.style.setProperty("--mouse-y", `${state.mouseY.toFixed(1)}px`);
+
+    const deltaX = Math.abs(state.targetMouseX - state.mouseX);
+    const deltaY = Math.abs(state.targetMouseY - state.mouseY);
+    if (deltaX > 0.25 || deltaY > 0.25) {
+      frame = requestAnimationFrame(syncMouse);
+    }
+  };
+
   window.addEventListener("pointermove", (event) => {
-    state.mouseX += (event.clientX - state.mouseX) * 0.35;
-    state.mouseY += (event.clientY - state.mouseY) * 0.35;
-    document.documentElement.style.setProperty("--mouse-x", `${state.mouseX}px`);
-    document.documentElement.style.setProperty("--mouse-y", `${state.mouseY}px`);
+    state.targetMouseX = event.clientX;
+    state.targetMouseY = event.clientY;
+    if (!frame) frame = requestAnimationFrame(syncMouse);
   }, { passive: true });
 };
 
 const setupScrollReaction = () => {
+  const root = document.documentElement;
   let lastY = window.scrollY;
   let ticking = false;
+  let decayFrame = 0;
+
+  const decay = () => {
+    decayFrame = 0;
+    if (!state.visible) return;
+
+    state.scrollVelocity += (state.targetScrollVelocity - state.scrollVelocity) * 0.18;
+    state.targetScrollVelocity *= 0.82;
+    root.style.setProperty("--scroll-react", clamp(state.scrollVelocity / 90, 0, 1).toFixed(3));
+
+    if (state.scrollVelocity > 0.08 || state.targetScrollVelocity > 0.08) {
+      decayFrame = requestAnimationFrame(decay);
+    }
+  };
+
+  const requestDecay = () => {
+    if (!decayFrame) decayFrame = requestAnimationFrame(decay);
+  };
 
   const update = () => {
     const y = window.scrollY;
-    state.scrollVelocity += (Math.abs(y - lastY) - state.scrollVelocity) * 0.12;
-    state.scroll = Math.min(1, y / Math.max(1, document.body.scrollHeight - window.innerHeight));
+    state.targetScrollVelocity = Math.abs(y - lastY);
+    state.scroll = clamp(y / Math.max(1, document.body.scrollHeight - window.innerHeight), 0, 1);
     lastY = y;
-    document.documentElement.style.setProperty("--scroll-react", String(Math.min(1, state.scrollVelocity / 80)));
     ticking = false;
+    requestDecay();
   };
 
   window.addEventListener("scroll", () => {
@@ -114,6 +267,7 @@ const setupScrollReaction = () => {
   }, { passive: true });
 
   update();
+  requestDecay();
 };
 
 const setupMatrixCanvas = () => {
@@ -123,12 +277,18 @@ const setupMatrixCanvas = () => {
   if (!context) return;
 
   const glyphs = "LEXOIRE 01 ROUTE VOICE SESSION PROVIDER MEMORY STREAM";
+  let profile = getAnimationProfile();
+  if (!profile.matrixFps) return;
+
   let columns = [];
   let width = 0;
   let height = 0;
+  let lastFrame = 0;
+  let resizeTimer = 0;
 
   const resize = () => {
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    profile = getAnimationProfile();
+    const ratio = profile.dpr;
     width = window.innerWidth;
     height = window.innerHeight;
     canvas.width = Math.floor(width * ratio);
@@ -136,16 +296,22 @@ const setupMatrixCanvas = () => {
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    columns = Array.from({ length: Math.ceil(width / 22) }, () => Math.random() * -height);
+    columns = Array.from({ length: Math.ceil(width / (width < 640 ? 32 : 24)) }, () => Math.random() * -height);
   };
 
-  const draw = () => {
+  const draw = (time = 0) => {
+    if (!state.visible || time - lastFrame < 1000 / profile.matrixFps) {
+      requestAnimationFrame(draw);
+      return;
+    }
+
+    lastFrame = time;
     context.fillStyle = "rgba(0, 0, 0, 0.08)";
     context.fillRect(0, 0, width, height);
     context.font = "12px SFMono-Regular, Menlo, monospace";
 
     columns.forEach((y, index) => {
-      const x = index * 22;
+      const x = index * (width < 640 ? 32 : 24);
       const glyph = glyphs[Math.floor(Math.random() * glyphs.length)];
       context.fillStyle = `rgba(57, 255, 136, ${0.05 + Math.random() * 0.12})`;
       context.fillText(glyph, x, y);
@@ -156,7 +322,10 @@ const setupMatrixCanvas = () => {
   };
 
   resize();
-  window.addEventListener("resize", resize);
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(resize, 120);
+  });
   draw();
 };
 
@@ -171,9 +340,15 @@ const setupFlowCanvas = () => {
   let particles = [];
   let circuits = [];
   let sphereDots = [];
+  let profile = getAnimationProfile();
+  let lastFrame = 0;
+  let resizeTimer = 0;
+
+  if (!profile.flowFps) return;
 
   const resize = () => {
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    profile = getAnimationProfile();
+    const ratio = profile.dpr;
     width = window.innerWidth;
     height = window.innerHeight;
     canvas.width = Math.floor(width * ratio);
@@ -181,21 +356,21 @@ const setupFlowCanvas = () => {
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    particles = Array.from({ length: Math.floor(width / 11) }, () => ({
+    particles = Array.from({ length: profile.particles }, () => ({
       x: Math.random() * width,
       y: Math.random() * height,
       z: 0.4 + Math.random() * 1.8,
       vx: -0.12 + Math.random() * 0.24,
       vy: -0.2 - Math.random() * 0.6,
     }));
-    circuits = Array.from({ length: 22 }, () => ({
+    circuits = Array.from({ length: profile.circuits }, () => ({
       x: Math.random() * width,
       y: Math.random() * height,
       length: 80 + Math.random() * 260,
       speed: 0.25 + Math.random() * 0.8,
       phase: Math.random() * 1000,
     }));
-    sphereDots = Array.from({ length: width < 820 ? 1600 : 3000 }, () => {
+    sphereDots = Array.from({ length: profile.sphereDots }, () => {
       const phi = Math.random() * Math.PI * 2;
       const theta = Math.acos(2 * Math.random() - 1);
       const radius = 0.9 + Math.random() * 0.16;
@@ -228,6 +403,12 @@ const setupFlowCanvas = () => {
   };
 
   const draw = (time) => {
+    if (!state.visible || time - lastFrame < 1000 / profile.flowFps) {
+      requestAnimationFrame(draw);
+      return;
+    }
+
+    lastFrame = time;
     context.clearRect(0, 0, width, height);
 
     drawBeam(time, 0.05, 0.075);
@@ -293,9 +474,9 @@ const setupFlowCanvas = () => {
 
     context.strokeStyle = "rgba(57, 255, 136, 0.055)";
     context.lineWidth = 1;
-    for (let y = -40; y < height + 40; y += 42) {
+    for (let y = -40; y < height + 40; y += profile.gridStep) {
       context.beginPath();
-      for (let x = 0; x <= width; x += 30) {
+      for (let x = 0; x <= width; x += 44) {
         const warp = Math.sin(x * 0.009 + y * 0.015 + time * 0.0007 + state.scroll * 8) * 8;
         const py = y + warp + state.scroll * 28;
         if (x === 0) context.moveTo(x, py);
@@ -336,15 +517,22 @@ const setupFlowCanvas = () => {
   };
 
   resize();
-  window.addEventListener("resize", resize);
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(resize, 120);
+  });
   requestAnimationFrame(draw);
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+  state.reducedMotion = readMotionPreference();
   setCurrentYear();
   setupNav();
   setupScrollSpy();
   setupReveal();
+  setupCenteredArticleLinks();
+  setupArticleLaunchLinks();
+  setupVisibility();
   setupMouseGlow();
   setupScrollReaction();
   setupMatrixCanvas();

@@ -1,80 +1,75 @@
-# Contributing to JARVIS
+# Contributing to Lexoire
 
-We love contributions! Here's how to get started.
+Thanks for helping improve Lexoire.
 
-## Getting Started
+## Before you start
 
-1. **Fork the repo** on GitHub
-2. **Clone your fork**: `git clone https://github.com/YOUR_USERNAME/jarvis.git`
-3. **Install dependencies**: `npm run install:all`
-4. **Start development**: `npm run dev`
+1. Fork the repository.
+2. Clone your fork.
+3. Install dependencies:
 
-## Development Workflow
+```bash
+npm run install:all
+```
 
-### Running the App
+## Local development
 
-**Development (with hot reload):**
+Run the web app:
+
 ```bash
 npm run dev
 ```
-- Frontend: http://localhost:3000
-- Backend: http://localhost:5000
 
-**Production build:**
+Run the Electron desktop app:
+
 ```bash
-npm run build
-npm start
+npm run electron:dev
 ```
 
-### Code Structure
+Create a production build:
 
-- **`frontend/src`** - React + Vite UI (components, hooks, services)
-- **`backend/src`** - Express + Socket.IO server (API, Copilot integration, persistence)
-- **`shared`** - Shared types and utilities
-- **`electron`** - Electron app wrapper for standalone executable
+```bash
+npm run build
+```
 
-### Making Changes
+## Project areas
 
-1. **Create a feature branch**: `git checkout -b feature/your-feature`
-2. **Make your changes** and test thoroughly
-3. **Build to verify**: `npm run build`
-4. **Commit with clear messages**: `git commit -m "feat: add cool feature"`
-5. **Push to your fork**: `git push origin feature/your-feature`
-6. **Open a Pull Request** with a clear description
+- `frontend/` - React + Vite interface
+- `backend/` - Express + Socket.IO runtime
+- `electron/` - Desktop shell and native bridges
+- `shared/` - Shared TypeScript types
+- `swift/` - Native macOS speech helper
+- `docs/` - Public contributor and architecture docs
 
-## Commit Convention
+## Pull requests
 
-We use conventional commits:
-- `feat:` - New features
-- `fix:` - Bug fixes
-- `docs:` - Documentation
-- `style:` - Code style (formatting, missing semicolons, etc)
-- `refactor:` - Code refactoring without feature changes
-- `perf:` - Performance improvements
-- `test:` - Adding or updating tests
-- `chore:` - Maintenance tasks
+Please:
 
-Example: `feat: add voice confidence indicators`
+1. Keep changes focused.
+2. Update docs when behavior changes.
+3. Run the existing build before opening a PR.
+4. Describe user impact and validation clearly.
 
-## Code Style
+## Commit style
 
-- Use TypeScript for all new code
-- Follow existing code patterns
-- Keep components small and focused
-- Add comments for non-obvious logic
+Conventional commits are preferred:
 
-## Testing
+- `feat:`
+- `fix:`
+- `docs:`
+- `refactor:`
+- `test:`
+- `chore:`
 
-Before submitting a PR:
-- Test locally in development mode
-- Test the production build: `npm run build && npm start`
-- Verify no console errors or warnings
-- Test voice features in Chrome/Edge (best browser support)
+## Quality bar
 
-## Questions?
+Before submitting:
 
-Open an issue or start a discussion on GitHub. We're here to help!
+- Run `npm run build`
+- Verify the affected flow locally
+- Check for obvious console/runtime errors
+- Note platform-specific caveats, especially for voice features
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+By contributing, you agree that your contributions will be released under the MIT License.

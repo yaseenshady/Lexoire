@@ -22,7 +22,7 @@ export { ParticleBackground } from './ParticleBackground';
 export { ErrorBoundary } from './ErrorBoundary';
 
 // Existing components - default exports
-export { default as JarvisSphere } from './JarvisSphere';
+export { default as LexoireSphere } from './LexoireSphere';
 export { default as ThemeSwitcher } from './ThemeSwitcher';
 export { default as AIAssistant } from './AIAssistant';
 export { default as NeuralGraphSphere } from './NeuralGraphSphere';

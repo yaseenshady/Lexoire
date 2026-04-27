@@ -12,7 +12,7 @@ const colors = {
 };
 
 class Logger {
-  private logFile = path.join(process.cwd(), 'logs', 'jarvis-backend.log');
+  private logFile = path.join(process.cwd(), 'logs', 'lexoire-backend.log');
 
   private formatTime(): string {
     return new Date().toLocaleTimeString();

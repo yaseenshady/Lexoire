@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🤖 Starting JARVIS Voice Automation System..."
+echo "🤖 Starting Lexoire Voice Automation System..."
 echo ""
 
 # Check if GitHub Copilot CLI is installed
@@ -30,7 +30,7 @@ echo "🚀 Starting development servers..."
 echo ""
 echo "   Frontend: http://localhost:3000"
 echo "   Backend:  http://localhost:5000"
-echo "   Memory:   SQLite at backend/jarvis.db"
+echo "   Memory:   SQLite at backend/lexoire.db"
 echo ""
 echo "Press Ctrl+C to stop"
 echo ""

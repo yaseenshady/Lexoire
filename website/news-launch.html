@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lexoire Launch | Voice-First Coding Control</title>
+  <meta
+    name="description"
+    content="Lexoire launches as an open-source voice-first control surface for coding tools, provider sessions, and durable context."
+  />
+  <link rel="icon" href="./icon.png" />
+  <link rel="stylesheet" href="./assets/styles.css" />
+</head>
+<body>
+  <div class="docs-readability-overlay" aria-hidden="true"></div>
+  <canvas class="matrix-canvas" data-matrix-canvas aria-hidden="true"></canvas>
+  <canvas class="flow-canvas" data-flow-canvas aria-hidden="true"></canvas>
+  <div class="sphere-focus" aria-hidden="true"></div>
+  <div class="cursor-glow" data-cursor-glow aria-hidden="true"></div>
+  <div class="cursor-reticle" data-cursor-reticle aria-hidden="true"></div>
+  <div class="crt-noise" aria-hidden="true"></div>
+  <div class="vertical-energy-bar" aria-hidden="true"></div>
+  <div class="scan-sweep" aria-hidden="true"></div>
+
+  <nav class="site-nav" data-site-nav>
+    <a class="brand" href="./index.html" aria-label="Lexoire home">
+      <span class="brand__mark">L</span>
+      <span class="brand__name">LEXOIRE</span>
+    </a>
+
+    <button class="nav-toggle" type="button" data-nav-toggle aria-label="Toggle navigation">MENU</button>
+
+    <div class="site-nav__links">
+      <a href="./index.html">Home</a>
+      <a href="./index.html#install">Install</a>
+      <a href="./developer-docs.html">Docs</a>
+      <a class="active" href="./news.html">News</a>
+    </div>
+  </nav>
+
+  <header class="article-hero">
+    <a class="article-back terminal-reveal" href="./news.html">Back to News</a>
+    <p class="eyebrow terminal-reveal">Launch / Apr 26, 2026</p>
+    <h1 class="distort-heading terminal-reveal">Lexoire launches as an open-source voice-first control surface for coding tools.</h1>
+  </header>
+
+  <main class="article-layout">
+    <article class="article-body terminal-reveal">
+      <p class="article-lead">
+        Lexoire is built for one core job: keep spoken intent attached to the right repo, provider session,
+        and visible stream of work while coding tools are actually doing things.
+      </p>
+
+      <h2>What ships in the launch release</h2>
+      <ul>
+        <li>Voice-first prompting tied to explicit sessions instead of disposable transcripts.</li>
+        <li>Provider routing across Copilot, Claude, and Codex with durable context files.</li>
+        <li>Visible processing state so users can see when the system is listening, working, or done.</li>
+        <li>A cleaner public repo with MIT licensing, docs, CI, and safer release hygiene.</li>
+      </ul>
+
+      <h2>Why the product exists</h2>
+      <p>
+        Coding agents are powerful, but they become harder to trust when voice, session state, and execution visibility
+        live in separate places. Lexoire treats voice as a control surface for real work, not as a novelty transcript.
+      </p>
+
+      <h2>What comes next</h2>
+      <p>
+        The immediate focus is operational reliability: tighter session flows, cleaner handoffs between providers,
+        and a desktop experience that stays transparent enough to steer during real coding sessions.
+      </p>
+    </article>
+  </main>
+
+  <footer class="terminal-footer">
+    <span>LEXOIRE NEWS</span>
+    <span><a href="./news.html">ALL DISPATCHES</a></span>
+    <span><span data-current-year></span></span>
+  </footer>
+
+  <script src="./assets/site.js"></script>
+</body>
+</html>

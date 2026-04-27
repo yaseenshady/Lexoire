@@ -3,7 +3,7 @@ declare module '*.css';
 interface Window {
   SpeechRecognition: any;
   webkitSpeechRecognition: any;
-  jarvis?: {
+  lexoire?: {
     platform?: string;
     speak?: (payload: unknown) => Promise<boolean>;
     stopSpeech?: () => Promise<void>;

@@ -26,7 +26,7 @@ If applicable, add screenshots or screen recordings to help explain your problem
 **Environment:**
  - OS: [e.g. macOS, Windows, Linux]
  - Browser: [e.g. Chrome, Edge]
- - JARVIS version: [e.g. v1.0]
+  - Lexoire version: [e.g. v1.0]
  - Backend port: [e.g. 5001]
 
 **Additional context**

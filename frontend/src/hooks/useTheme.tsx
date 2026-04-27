@@ -52,14 +52,14 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [themeName, setThemeName] = useState<ThemeName>(() => {
-    const saved = localStorage.getItem('jarvis.theme');
+    const saved = localStorage.getItem('lexoire.theme');
     return (saved as ThemeName) || 'cyberpunk';
   });
 
   const theme = themes[themeName];
 
   useEffect(() => {
-    localStorage.setItem('jarvis.theme', themeName);
+    localStorage.setItem('lexoire.theme', themeName);
     // Apply theme CSS variables
     document.documentElement.style.setProperty('--theme-primary', theme.primary);
     document.documentElement.style.setProperty('--theme-secondary', theme.secondary);

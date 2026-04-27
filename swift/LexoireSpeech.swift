@@ -21,22 +21,22 @@ func startRecognition() {
     }
     do {
         try audioEngine.start()
-        print("JARVIS_READY")
+        print("LEXOIRE_READY")
     } catch {
-        print("JARVIS_ERROR:audio:\(error.localizedDescription)")
+        print("LEXOIRE_ERROR:audio:\(error.localizedDescription)")
         exit(1)
     }
     task = recognizer.recognitionTask(with: request) { result, error in
         if let r = result {
             let txt = r.bestTranscription.formattedString
             if r.isFinal {
-                print("JARVIS_FINAL:\(txt)")
+                print("LEXOIRE_FINAL:\(txt)")
             } else {
-                print("JARVIS_INTERIM:\(txt)")
+                print("LEXOIRE_INTERIM:\(txt)")
             }
         }
         if let e = error {
-            print("JARVIS_ERROR:recognition:\(e.localizedDescription)")
+            print("LEXOIRE_ERROR:recognition:\(e.localizedDescription)")
         }
     }
 }
@@ -46,16 +46,16 @@ SFSpeechRecognizer.requestAuthorization { status in
     case .authorized:
         startRecognition()
     case .denied:
-        print("JARVIS_ERROR:denied:Go to System Settings > Privacy > Speech Recognition and enable for this app")
+        print("LEXOIRE_ERROR:denied:Go to System Settings > Privacy > Speech Recognition and enable for this app")
         exit(1)
     case .restricted:
-        print("JARVIS_ERROR:restricted:Speech recognition restricted on this device")
+        print("LEXOIRE_ERROR:restricted:Speech recognition restricted on this device")
         exit(1)
     case .notDetermined:
-        print("JARVIS_ERROR:notDetermined:Authorization not determined")
+        print("LEXOIRE_ERROR:notDetermined:Authorization not determined")
         exit(1)
     @unknown default:
-        print("JARVIS_ERROR:unknown")
+        print("LEXOIRE_ERROR:unknown")
         exit(1)
     }
 }

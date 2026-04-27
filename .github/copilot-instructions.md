@@ -1,7 +1,7 @@
-# Copilot Instructions for JARVIS
+# Copilot Instructions for Lexoire
 
 ## Project Overview
-JARVIS is a voice-driven AI automation system that orchestrates multiple GitHub Copilot CLI sessions through a futuristic web/Electron interface. The system uses a local SQLite database to track sessions, conversations, and task management.
+Lexoire is a voice-driven AI automation system that orchestrates multiple GitHub Copilot CLI sessions through a web/Electron interface. The system uses a local SQLite database to track sessions, conversations, and task management.
 
 ## Architecture Principles
 - **Multi-session orchestrator**: Voice commands route to different Copilot sessions
@@ -17,7 +17,7 @@ JARVIS is a voice-driven AI automation system that orchestrates multiple GitHub 
 
 ## File Structure
 ```
-jarvis/
+lexoire/
 ├── frontend/src/
 │   ├── App.tsx / AppClean.tsx       # Main app entry
 │   ├── components/                  # React components

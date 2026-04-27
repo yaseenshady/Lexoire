@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, memo } from 'react';
 import { io } from 'socket.io-client';
 import RealisticSphere from './components/RealisticSphere';
 
-const SILENCE_MS = 2300; // 2.3 seconds without new words triggers auto-send
+const SILENCE_MS = 2000; // 2.0 seconds without new words triggers auto-send
 
 type Agent = 'copilot' | 'claude' | 'codex';
 type VoiceMode = 'hifi' | 'classic';
@@ -11,7 +11,22 @@ type VoiceCapabilities = {
   nativeSpeechRecognition: boolean;
   nativeTtsFallback: boolean;
 };
-interface Msg { id: number; role: 'user' | 'jarvis'; text: string; agent?: Agent; }
+interface Msg { id: number; role: 'user' | 'assistant'; text: string; agent?: Agent; createdAt: number; }
+interface SavedConversationMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  metadata?: Record<string, unknown>;
+}
+interface SavedConversation {
+  id: string;
+  title: string;
+  messages: SavedConversationMessage[];
+  projectId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
 interface WorkspaceSession {
   id: string;
   name: string;
@@ -26,6 +41,7 @@ interface CommandResponsePayload {
   status?: 'busy' | 'ok' | 'error';
   suppressSpeech?: boolean;
   cue?: 'bubble';
+  aborted?: boolean;
 }
 interface SessionDraft {
   name: string;
@@ -52,6 +68,13 @@ const AUDIO_INPUT_CONSTRAINTS: MediaStreamConstraints = {
     channelCount: 1,
   },
 };
+
+const ECHO_FILLER_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'be', 'for', 'from', 'get', 'got', 'had', 'has', 'have',
+  'i', 'if', 'in', 'is', 'it', 'just', 'know', 'like', 'me', 'my', 'not', 'of', 'oh',
+  'ok', 'okay', 'on', 'or', 'so', 'that', 'the', 'their', 'there', 'they', 'this',
+  'to', 'uh', 'um', 'was', 'we', 'what', 'with', 'would', 'yeah', 'you', 'your',
+]);
 
 function BlinkCursor() {
   const [on, setOn] = useState(true);
@@ -122,6 +145,8 @@ function formatStreamStatus(phase?: string, detail?: string) {
     ? 'Starting'
     : phase === 'chunk'
       ? 'Streaming'
+      : phase === 'heartbeat'
+        ? 'Working'
       : phase === 'complete'
         ? 'Finishing'
         : phase === 'error'
@@ -140,7 +165,7 @@ const AGENT_COLORS: Record<Agent, { border: string; bg: string; text: string; la
 export default function App() {
   const [agent, setAgent] = useState<Agent>('copilot');
   const agentRef = useRef<Agent>('copilot');
-  const [msgs, setMsgs] = useState<Msg[]>([{ id: 0, role: 'jarvis', text: 'Lexoire online. Awaiting input.', agent: 'copilot' }]);
+  const [msgs, setMsgs] = useState<Msg[]>([{ id: 0, role: 'assistant', text: 'Lexoire online. Awaiting input.', agent: 'copilot', createdAt: Date.now() }]);
   const [interim, setInterim] = useState('');
   const [draft, setDraft] = useState('');
   const [listening, setListening] = useState(false);
@@ -198,6 +223,7 @@ export default function App() {
   const swiftStartTimeoutRef = useRef<number | null>(null);
   const responseTimer = useRef<any>(null);
   const responseTimerProviderRef = useRef<Agent>('copilot');
+  const activeResponseAgentRef = useRef<Agent | null>(null);
   const promptQueueRef = useRef<QueuedPrompt[]>([]);
   const speechQueueRef = useRef<string[]>([]);
   const streamedResponseRef = useRef('');
@@ -208,9 +234,16 @@ export default function App() {
   const suppressCurrentResponseSpeechRef = useRef(false);
   const currentSpokenTextRef = useRef('');
   const recentSpokenTextRef = useRef<string[]>([]);
+  // Timestamp (ms) until which transcripts should be checked for TTS echo even after speech ends
+  const postSpeechEchoGuardRef = useRef<number>(0);
   const browserRecognitionRef = useRef<any>(null);
   const browserSpeechFinalRef = useRef('');
   const suppressRecognitionResumeRef = useRef(false);
+  const conversationIdRef = useRef(`conv-${Date.now()}`);
+  const conversationCreatedAtRef = useRef(Date.now());
+  const conversationSaveTimerRef = useRef<number | null>(null);
+  const queuedPromptDispatchTimerRef = useRef<number | null>(null);
+  const interruptionCandidateRef = useRef<{ text: string; firstSeenAt: number; lastSeenAt: number; hits: number } | null>(null);
   const msgsEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const nextId = useRef(1);
@@ -226,7 +259,7 @@ export default function App() {
   const speechVelocityRef = useRef<number>(0);
 
   const logDebug = (message: string) => {
-    console.log('[JARVIS]', message);
+    console.log('[LEXOIRE]', message);
   };
 
   const clearComposer = () => {
@@ -234,6 +267,7 @@ export default function App() {
     draftRef.current = '';
     setInterim('');
     interimRef.current = '';
+    interruptionCandidateRef.current = null;
   };
 
   const syncQueuedPromptState = () => {
@@ -246,6 +280,13 @@ export default function App() {
     setEditingQueuedPromptText('');
   };
 
+  const clearQueuedPromptDispatchTimer = () => {
+    if (queuedPromptDispatchTimerRef.current !== null) {
+      window.clearTimeout(queuedPromptDispatchTimerRef.current);
+      queuedPromptDispatchTimerRef.current = null;
+    }
+  };
+
   useEffect(() => { draftRef.current = draft; }, [draft]);
   useEffect(() => { busyRef.current = busy; }, [busy]);
   useEffect(() => { listeningRef.current = listening; }, [listening]);
@@ -255,6 +296,45 @@ export default function App() {
   useEffect(() => { micPermissionRef.current = micPermission; }, [micPermission]);
   useEffect(() => { msgsEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, interim]);
   useEffect(() => {
+    const persistedMessages = msgs.filter((msg) => msg.text.trim());
+    if (persistedMessages.length === 0) {
+      return;
+    }
+    if (conversationSaveTimerRef.current !== null) {
+      window.clearTimeout(conversationSaveTimerRef.current);
+    }
+    conversationSaveTimerRef.current = window.setTimeout(() => {
+      conversationSaveTimerRef.current = null;
+      if (!socketRef.current?.connected) return;
+      const firstUserMessage = persistedMessages.find((msg) => msg.role === 'user' && msg.text.trim());
+      const title = (firstUserMessage?.text || `Lexoire session ${currentSessionId || 'new'}`)
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 72) || 'Lexoire session';
+      const conversation: SavedConversation = {
+        id: conversationIdRef.current,
+        title,
+        projectId: activeWorkspaceSessionId || undefined,
+        createdAt: conversationCreatedAtRef.current,
+        updatedAt: Date.now(),
+        messages: persistedMessages.map((msg) => ({
+          id: `msg-${msg.id}`,
+          role: msg.role === 'user' ? 'user' : 'assistant',
+          content: msg.text,
+          timestamp: msg.createdAt,
+          metadata: msg.agent ? { agent: msg.agent } : undefined,
+        })),
+      };
+      socketRef.current.emit('conversation:save', conversation);
+    }, 700);
+    return () => {
+      if (conversationSaveTimerRef.current !== null) {
+        window.clearTimeout(conversationSaveTimerRef.current);
+        conversationSaveTimerRef.current = null;
+      }
+    };
+  }, [msgs, currentSessionId, activeWorkspaceSessionId]);
+  useEffect(() => {
     if (sessionDropdownOpen) {
       refreshWorkspaceSessions();
     }
@@ -262,6 +342,12 @@ export default function App() {
   useEffect(() => () => {
     if (listeningRestartTimer.current !== null) {
       window.clearTimeout(listeningRestartTimer.current);
+    }
+    if (conversationSaveTimerRef.current !== null) {
+      window.clearTimeout(conversationSaveTimerRef.current);
+    }
+    if (queuedPromptDispatchTimerRef.current !== null) {
+      window.clearTimeout(queuedPromptDispatchTimerRef.current);
     }
     microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
   }, []);
@@ -369,7 +455,7 @@ export default function App() {
         clearListeningRestartTimer();
         if (!micPermissionNoticeRef.current) {
           micPermissionNoticeRef.current = true;
-          addMsg('jarvis', '[ERROR] Microphone permission is blocked. Enable Microphone and Speech Recognition in System Settings > Privacy & Security, then restart Lexoire.');
+          addMsg('assistant', '[ERROR] Microphone permission is blocked. Enable Microphone and Speech Recognition in System Settings > Privacy & Security, then restart Lexoire.');
         }
       }
     }
@@ -395,7 +481,7 @@ export default function App() {
     
     sock.on('error', (err) => {
       console.error('[SOCKET] Connection error:', err);
-      addMsg('jarvis', `[ERROR] Socket connection failed: ${err}`);
+      addMsg('assistant', `[ERROR] Socket connection failed: ${err}`);
     });
     
     sock.on('disconnect', (reason) => {
@@ -405,6 +491,7 @@ export default function App() {
       setBusy(false);
       setActiveStreamingMessage(null);
       setStreamStatus(null);
+      activeResponseAgentRef.current = null;
     });
     
     sock.on('connect_error', (err) => {
@@ -413,52 +500,65 @@ export default function App() {
       setBusy(false);
       setActiveStreamingMessage(null);
       setStreamStatus(null);
+      activeResponseAgentRef.current = null;
     });
     
     const speakStreamedWords = (chunk: string) => {
-      if (mutedRef.current || !voiceRepliesRef.current || suppressCurrentResponseSpeechRef.current) return;
+      if (!voiceRepliesRef.current || suppressCurrentResponseSpeechRef.current) return;
       speechStreamBufferRef.current += chunk;
-      const buf = speechStreamBufferRef.current;
+      let buf = speechStreamBufferRef.current;
+      let spokeSomething = false;
 
-      // Speak at sentence boundaries: . ! ? followed by space/newline
-      const sentenceMatch = buf.match(/^([\s\S]*?[.!?])(\s+|$)/);
-      if (sentenceMatch && sentenceMatch[1].trim().split(/\s+/).length >= 3) {
-        const toSpeak = stripSpeechMarkup(sentenceMatch[1]).trim();
-        speechStreamBufferRef.current = buf.slice(sentenceMatch[0].length);
-        if (toSpeak) { hasSpeechStreamedRef.current = true; _speak(toSpeak); }
-        return;
-      }
-
-      // Speak at comma/colon pauses with enough words
-      const pauseMatch = buf.match(/^([\s\S]*?[,:])\s+/);
-      if (pauseMatch && pauseMatch[1].trim().split(/\s+/).length >= 6) {
-        const toSpeak = stripSpeechMarkup(pauseMatch[1]).trim();
-        speechStreamBufferRef.current = buf.slice(pauseMatch[0].length);
-        if (toSpeak) { hasSpeechStreamedRef.current = true; _speak(toSpeak); }
-        return;
-      }
-
-      // Speak at word boundary when buffer has 12+ words
-      const words = buf.split(/\s+/);
-      if (words.length > 12) {
-        const lastSpace = buf.lastIndexOf(' ');
-        if (lastSpace > 0) {
-          const toSpeak = stripSpeechMarkup(buf.slice(0, lastSpace)).trim();
-          speechStreamBufferRef.current = buf.slice(lastSpace + 1);
-          if (toSpeak) { hasSpeechStreamedRef.current = true; _speak(toSpeak); }
+      // Drain ALL complete sentences from the buffer (not just the first one)
+      let sentenceMatch: RegExpMatchArray | null;
+      while ((sentenceMatch = buf.match(/^([\s\S]*?[.!?])(\s+|$)/))) {
+        if (sentenceMatch[1].trim().split(/\s+/).length >= 2) {
+          const toSpeak = stripSpeechMarkup(sentenceMatch[1]).trim();
+          buf = buf.slice(sentenceMatch[0].length);
+          if (toSpeak) { hasSpeechStreamedRef.current = true; _speak(toSpeak); spokeSomething = true; }
+        } else {
+          break; // Sentence too short — leave it in the buffer
         }
       }
+
+      if (!spokeSomething) {
+        // No complete sentences yet — try comma/colon pause with enough words
+        const pauseMatch = buf.match(/^([\s\S]*?[,:])\s+/);
+        if (pauseMatch && pauseMatch[1].trim().split(/\s+/).length >= 5) {
+          const toSpeak = stripSpeechMarkup(pauseMatch[1]).trim();
+          buf = buf.slice(pauseMatch[0].length);
+          if (toSpeak) { hasSpeechStreamedRef.current = true; _speak(toSpeak); spokeSomething = true; }
+        }
+
+        // Or flush at word boundary when buffer is getting long (10+ words)
+        if (!spokeSomething) {
+          const words = buf.split(/\s+/);
+          if (words.length > 10) {
+            const lastSpace = buf.lastIndexOf(' ');
+            if (lastSpace > 0) {
+              const toSpeak = stripSpeechMarkup(buf.slice(0, lastSpace)).trim();
+              buf = buf.slice(lastSpace + 1);
+              if (toSpeak) { hasSpeechStreamedRef.current = true; _speak(toSpeak); }
+            }
+          }
+        }
+      }
+
+      speechStreamBufferRef.current = buf;
     };
 
-    const appendChunk = (chunk: string) => {
+    const appendChunk = (provider: Agent, chunk: string) => {
+      if (activeStreamMsgIdRef.current === null || activeResponseAgentRef.current !== provider) {
+        return;
+      }
       busyRef.current = true;
       setBusy(true);
-      startResponseTimer();
+      startResponseTimer(provider);
       streamedResponseRef.current += chunk;
       const activeMessageId = activeStreamMsgIdRef.current;
       const streamedChars = streamedResponseRef.current.length;
       setStreamStatus(prev => ({
-        provider: prev?.provider ?? agentRef.current,
+        provider: prev?.provider ?? provider,
         phase: 'chunk',
         detail: `${streamedChars} chars`,
       }));
@@ -479,10 +579,28 @@ export default function App() {
     };
 
     const handleResponse = (data: CommandResponsePayload, ag?: Agent) => {
+      const provider = ag ?? agentRef.current;
+      if (activeResponseAgentRef.current && activeResponseAgentRef.current !== provider) {
+        return;
+      }
       logDebug(`${(ag || agentRef.current).toUpperCase()} response complete`);
       clearResponseTimer();
       if (data.sessionId) setCurrentSessionId(data.sessionId);
       const activeMessageId = activeStreamMsgIdRef.current;
+      if (data.aborted) {
+        busyRef.current = false;
+        setBusy(false);
+        streamedResponseRef.current = '';
+        speechStreamBufferRef.current = '';
+        hasSpeechStreamedRef.current = false;
+        suppressCurrentResponseSpeechRef.current = false;
+        setActiveStreamingMessage(null);
+        setStreamStatus(null);
+        activeResponseAgentRef.current = null;
+        if (!speechActiveRef.current) scheduleListeningResume(120);
+        processNextQueuedPrompt();
+        return;
+      }
       const responseSpeechSuppressed = suppressCurrentResponseSpeechRef.current || Boolean(data.suppressSpeech);
 
       // Flush any remaining streamed speech buffer
@@ -500,18 +618,18 @@ export default function App() {
           ? prev.findIndex(msg => msg.id === activeMessageId)
           : prev.length - 1;
         const target = targetIndex >= 0 ? prev[targetIndex] : undefined;
-        const finalText = target?.role === 'jarvis'
+        const finalText = target?.role === 'assistant'
           ? target.text.trim() || finalFallback
           : finalFallback;
         spokenText = finalText || spokenText;
 
-        if (target?.role === 'jarvis' && targetIndex >= 0) {
+        if (target?.role === 'assistant' && targetIndex >= 0) {
           if (!finalText) return prev.filter((_, index) => index !== targetIndex);
           const next = [...prev];
           next[targetIndex] = { ...target, text: finalText, agent: ag ?? target.agent };
           return next;
         }
-        return finalText ? [...prev, { id: nextId.current++, role: 'jarvis', text: finalText, agent: ag }] : prev;
+        return finalText ? [...prev, { id: nextId.current++, role: 'assistant', text: finalText, agent: ag, createdAt: Date.now() }] : prev;
       });
 
       if (data.cue === 'bubble') {
@@ -532,14 +650,15 @@ export default function App() {
       suppressCurrentResponseSpeechRef.current = false;
       setActiveStreamingMessage(null);
       setStreamStatus(null);
+      activeResponseAgentRef.current = null;
       processNextQueuedPrompt();
     };
 
-    sock.on('command:chunk', (data: any) => { if (data.chunk) appendChunk(data.chunk); });
+    sock.on('command:chunk', (data: any) => { if (data.chunk) appendChunk('copilot', data.chunk); });
     sock.on('command:response', (data: CommandResponsePayload) => handleResponse(data, 'copilot'));
-    sock.on('claude:chunk',    (data: any) => { if (data.chunk) appendChunk(data.chunk); });
+    sock.on('claude:chunk',    (data: any) => { if (data.chunk) appendChunk('claude', data.chunk); });
     sock.on('claude:response', (data: CommandResponsePayload) => handleResponse(data, 'claude'));
-    sock.on('codex:chunk',     (data: any) => { if (data.chunk) appendChunk(data.chunk); });
+    sock.on('codex:chunk',     (data: any) => { if (data.chunk) appendChunk('codex', data.chunk); });
     sock.on('codex:response',  (data: CommandResponsePayload) => handleResponse(data, 'codex'));
     sock.on('agent:status', (data: any) => {
       const providerKey = String(data?.provider || 'copilot').toLowerCase() as Agent;
@@ -547,14 +666,14 @@ export default function App() {
       const phase = String(data?.phase || 'status');
       const detail = data?.detail ? ` ${data.detail}` : '';
       logDebug(`${provider} ${phase}${detail}`);
-      if (phase === 'start' || phase === 'chunk' || phase === 'complete' || phase === 'error') {
+      if (phase === 'start' || phase === 'chunk' || phase === 'heartbeat' || phase === 'complete' || phase === 'error') {
         setStreamStatus({
           provider: providerKey,
           phase,
           detail: typeof data?.detail === 'string' ? data.detail : undefined,
         });
       }
-      if (phase === 'start' || phase === 'chunk') {
+      if (phase === 'start' || phase === 'chunk' || phase === 'heartbeat') {
         startResponseTimer(providerKey);
         busyRef.current = true;
         setBusy(true);
@@ -583,8 +702,8 @@ export default function App() {
 
   // ── Speech recognition: browser first, native fallback when available ─────
   useEffect(() => {
-    const jarvis = (window as any).jarvis;
-    jarvis?.onSpeech?.((ev: { type: string; text?: string }) => {
+    const lexoire = window.lexoire;
+    lexoire?.onSpeech?.((ev: { type: string; text?: string }) => {
       console.log('[SPEECH]', ev.type, ev.text?.slice(0, 50));
       if (mutedRef.current && ev.type !== 'error') return;
       if (ev.type === 'ready') {
@@ -596,11 +715,11 @@ export default function App() {
       } else if (ev.type === 'interim' && ev.text) {
         const txt = ev.text.trim();
         if (!txt) return;
-        if (isSpeechInterruptCommand(txt) && (speechActiveRef.current || speechQueueRef.current.length > 0 || isSpeaking)) {
-          stopCurrentSpeech();
+        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
           return;
         }
-        if (speechActiveRef.current && !shouldTreatAsBargeIn(txt, false)) {
+        // Post-TTS echo guard: suppress interim echo from the app's own voice
+        if (Date.now() < postSpeechEchoGuardRef.current && isLikelySpeechEcho(txt)) {
           return;
         }
         setInterim(txt);
@@ -614,11 +733,12 @@ export default function App() {
           console.log('[SPEECH] Final text empty, still triggering timer');
           return;
         }
-        if (isSpeechInterruptCommand(txt) && (speechActiveRef.current || speechQueueRef.current.length > 0 || isSpeaking)) {
-          stopCurrentSpeech();
+        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
           return;
         }
-        if (speechActiveRef.current && !shouldTreatAsBargeIn(txt, true)) {
+        // Post-TTS echo guard: discard if the mic picked up the app's own voice after it finished speaking
+        if (Date.now() < postSpeechEchoGuardRef.current && isLikelySpeechEcho(txt)) {
+          console.log('[SPEECH] Post-TTS echo suppressed (native):', txt.slice(0, 40));
           return;
         }
         const n = draftRef.current ? draftRef.current + ' ' + txt : txt;
@@ -643,11 +763,11 @@ export default function App() {
           clearListeningRestartTimer();
           if (!micPermissionNoticeRef.current) {
             micPermissionNoticeRef.current = true;
-            addMsg('jarvis', '[ERROR] Microphone or Speech Recognition permission is blocked. Enable both in System Settings > Privacy & Security, then restart Lexoire.');
+            addMsg('assistant', '[ERROR] Microphone or Speech Recognition permission is blocked. Enable both in System Settings > Privacy & Security, then restart Lexoire.');
           }
           return;
         }
-        addMsg('jarvis', `[ERROR] ${errorText}`);
+        addMsg('assistant', `[ERROR] ${errorText}`);
         scheduleListeningResume(600);
       }
     });
@@ -655,8 +775,8 @@ export default function App() {
     return () => { stopListening(); };
   }, []);
 
-  const addMsg = (role: 'user' | 'jarvis', text: string, ag?: Agent) => {
-    setMsgs(prev => [...prev, { id: nextId.current++, role, text, agent: ag ?? agentRef.current }]);
+  const addMsg = (role: 'user' | 'assistant', text: string, ag?: Agent) => {
+    setMsgs(prev => [...prev, { id: nextId.current++, role, text, agent: ag ?? agentRef.current, createdAt: Date.now() }]);
   };
 
   const normalizeComparableSpeech = (text: string) => text
@@ -665,11 +785,38 @@ export default function App() {
     .replace(/\s+/g, ' ')
     .trim();
 
+  const analyzeTranscriptAgainstSpeech = (text: string) => {
+    const normalized = normalizeComparableSpeech(text);
+    const transcriptWords = normalized.split(' ').filter(Boolean);
+    const spokenWindow = [currentSpokenTextRef.current, ...recentSpokenTextRef.current]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    const spokenWords = spokenWindow.split(' ').filter(Boolean);
+    const spokenWordSet = new Set(spokenWords);
+    const overlapCount = transcriptWords.filter((word) => spokenWordSet.has(word)).length;
+    const overlap = transcriptWords.length > 0 ? overlapCount / transcriptWords.length : 0;
+    const novelWords = transcriptWords.filter((word) => !spokenWordSet.has(word));
+    const novelSignificantWords = novelWords.filter(
+      (word) => word.length >= 3 && !ECHO_FILLER_WORDS.has(word),
+    );
+
+    return {
+      normalized,
+      transcriptWords,
+      spokenWindow,
+      spokenWords,
+      overlap,
+      novelWords,
+      novelSignificantWords,
+    };
+  };
+
   const rememberSpokenText = (text: string) => {
     const normalized = normalizeComparableSpeech(text);
     if (!normalized) return;
     currentSpokenTextRef.current = normalized;
-    recentSpokenTextRef.current = [...recentSpokenTextRef.current, normalized].slice(-6);
+    recentSpokenTextRef.current = [...recentSpokenTextRef.current, normalized].slice(-12);
   };
 
   const resetSpokenTextMemory = () => {
@@ -677,36 +824,71 @@ export default function App() {
     recentSpokenTextRef.current = [];
   };
 
-  const isLikelySpeechEcho = (text: string) => {
-    const normalized = normalizeComparableSpeech(text);
-    if (!normalized) return false;
+  const resetInterruptionCandidate = () => {
+    interruptionCandidateRef.current = null;
+  };
 
-    const spokenWindow = [currentSpokenTextRef.current, ...recentSpokenTextRef.current]
-      .filter(Boolean)
-      .join(' ');
+  const advanceInterruptionCandidate = (normalized: string) => {
+    const now = Date.now();
+    const current = interruptionCandidateRef.current;
+    const overlapsCurrent = current
+      ? normalized.startsWith(current.text) || current.text.startsWith(normalized)
+      : false;
 
-    if (!spokenWindow) {
-      return false;
+    if (!current || !overlapsCurrent) {
+      interruptionCandidateRef.current = {
+        text: normalized,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        hits: 1,
+      };
+      return interruptionCandidateRef.current;
     }
 
-    if (spokenWindow.includes(normalized)) {
+    interruptionCandidateRef.current = {
+      text: normalized.length >= current.text.length ? normalized : current.text,
+      firstSeenAt: current.firstSeenAt,
+      lastSeenAt: now,
+      hits: current.hits + 1,
+    };
+    return interruptionCandidateRef.current;
+  };
+
+  const isLikelySpeechEcho = (text: string) => {
+    const {
+      normalized,
+      transcriptWords,
+      spokenWindow,
+      spokenWords,
+      overlap,
+      novelSignificantWords,
+    } = analyzeTranscriptAgainstSpeech(text);
+    if (!normalized) return false;
+
+    if (!spokenWindow) return false;
+
+    // Exact substring match
+    if (spokenWindow.includes(normalized)) return true;
+
+    // Single word: echo if that word appears in what was spoken
+    if (transcriptWords.length === 1) {
+      return spokenWords.includes(transcriptWords[0]);
+    }
+
+    if (novelSignificantWords.length === 0 && overlap >= 0.45) {
       return true;
     }
 
-    const transcriptWords = normalized.split(' ').filter(Boolean);
-    if (transcriptWords.length < 2) {
-      return false;
-    }
-
-    const spokenWords = new Set(spokenWindow.split(' ').filter(Boolean));
-    const overlap = transcriptWords.filter((word) => spokenWords.has(word)).length / transcriptWords.length;
-    return overlap >= 0.8;
+    // Lower threshold for short phrases (partial echo capture more likely)
+    const threshold = transcriptWords.length <= 4 ? 0.5 : 0.68;
+    return overlap >= threshold;
   };
 
   const interruptSpeechPlayback = (suppressCurrentResponseVoice = false) => {
     if (suppressCurrentResponseVoice) {
       suppressCurrentResponseSpeechRef.current = true;
     }
+    resetInterruptionCandidate();
     speechQueueRef.current = [];
     setSpeechQueueCount(0);
     speechStreamBufferRef.current = '';
@@ -714,30 +896,135 @@ export default function App() {
     currentSpokenTextRef.current = '';
     speechActiveRef.current = false;
     setIsSpeaking(false);
+    // Clear echo guard so mic restarts promptly after user barge-in
+    postSpeechEchoGuardRef.current = 0;
     window.speechSynthesis?.cancel?.();
-    (window as any).jarvis?.stopSpeech?.();
+    window.lexoire?.stopSpeech?.();
+  };
+
+  const markActiveResponseStopped = (messageId: number | null, provider: Agent | null) => {
+    if (messageId === null) return;
+    setMsgs(prev => {
+      const targetIndex = prev.findIndex(msg => msg.id === messageId);
+      if (targetIndex < 0) return prev;
+      const target = prev[targetIndex];
+      const label = '[Stopped]';
+      const nextText = target.text.trim();
+      if (nextText.endsWith(label)) return prev;
+      const updated = nextText ? `${nextText}\n\n${label}` : label;
+      const next = [...prev];
+      next[targetIndex] = { ...target, text: updated, agent: provider ?? target.agent };
+      return next;
+    });
+  };
+
+  const abortActiveResponse = () => {
+    const provider = activeResponseAgentRef.current ?? streamStatus?.provider ?? agentRef.current;
+    const activeMessageId = activeStreamMsgIdRef.current;
+    if (!busyRef.current && activeMessageId === null) {
+      return false;
+    }
+    markActiveResponseStopped(activeMessageId, provider);
+    interruptSpeechPlayback(true);
+    clearResponseTimer();
+    busyRef.current = false;
+    setBusy(false);
+    streamedResponseRef.current = '';
+    speechStreamBufferRef.current = '';
+    hasSpeechStreamedRef.current = false;
+    setActiveStreamingMessage(null);
+    setStreamStatus(null);
+    activeResponseAgentRef.current = null;
+    socketRef.current?.emit(`${provider}:abort`);
+    return true;
+  };
+
+  const confirmAbortActiveResponse = () => {
+    return abortActiveResponse();
+  };
+
+  const shouldInterruptCurrentSpeech = (text: string, isFinal: boolean) => {
+    if (!(speechActiveRef.current || speechQueueRef.current.length > 0 || isSpeaking)) {
+      resetInterruptionCandidate();
+      return false;
+    }
+
+    if (!isSpeechInterruptCommand(text)) {
+      resetInterruptionCandidate();
+      return false;
+    }
+
+    if (isLikelySpeechEcho(text)) {
+      resetInterruptionCandidate();
+      return false;
+    }
+
+    if (isFinal) {
+      resetInterruptionCandidate();
+      return true;
+    }
+
+    const normalized = normalizeComparableSpeech(text);
+    if (normalized.length < 4 || audioLevelRef.current < 0.045) {
+      return false;
+    }
+
+    const candidate = advanceInterruptionCandidate(normalized);
+    const sustained = candidate.hits >= 2 && (candidate.lastSeenAt - candidate.firstSeenAt >= 120 || normalized.length >= 8);
+    if (!sustained) {
+      return false;
+    }
+
+    resetInterruptionCandidate();
+    return true;
   };
 
   const shouldTreatAsBargeIn = (text: string, isFinal: boolean) => {
     if (!speechActiveRef.current) {
+      resetInterruptionCandidate();
       return false;
     }
 
-    const normalized = normalizeComparableSpeech(text);
+    const analysis = analyzeTranscriptAgainstSpeech(text);
+    const { normalized, transcriptWords, overlap, novelWords, novelSignificantWords } = analysis;
     if (!normalized || isLikelySpeechEcho(normalized)) {
+      resetInterruptionCandidate();
       return false;
     }
 
-    const wordCount = normalized.split(' ').filter(Boolean).length;
-    const hasEnoughTranscript = wordCount >= (isFinal ? 1 : 2) || normalized.length >= 10;
+    const wordCount = transcriptWords.length;
+    const hasEnoughTranscript = isFinal
+      ? wordCount >= 1 || normalized.length >= 4
+      : wordCount >= 2 || normalized.length >= 6;
     if (!hasEnoughTranscript) {
+      if (isFinal) resetInterruptionCandidate();
       return false;
     }
 
-    if (!isFinal && audioLevelRef.current < 0.04) {
+    const hasEnoughNovelSpeech = novelSignificantWords.length >= 1
+      || novelWords.join(' ').length >= 6;
+    if (!hasEnoughNovelSpeech) {
+      if (isFinal) resetInterruptionCandidate();
       return false;
     }
 
+    if (overlap >= (isFinal ? 0.62 : 0.52)) {
+      resetInterruptionCandidate();
+      return false;
+    }
+
+    if (!isFinal) {
+      if (audioLevelRef.current < 0.045) {
+        return false;
+      }
+      const candidate = advanceInterruptionCandidate(normalized);
+      const sustained = candidate.hits >= 2 && (candidate.lastSeenAt - candidate.firstSeenAt >= 90 || normalized.length >= 10);
+      if (!sustained) {
+        return false;
+      }
+    }
+
+    resetInterruptionCandidate();
     interruptSpeechPlayback(true);
     return true;
   };
@@ -765,25 +1052,14 @@ export default function App() {
         return;
       }
       responseTimer.current = null;
-      busyRef.current = false;
-      setBusy(false);
-      setMsgs(prev => {
-        const message = streamedResponseRef.current.trim()
-          ? `[ERROR] ${AGENT_COLORS[timeoutProvider].label} stopped streaming before finishing.`
-          : `[ERROR] ${AGENT_COLORS[timeoutProvider].label} did not respond. Check the provider CLI or try another provider for this session.`;
-        if (activeMessageId !== null) {
-          const targetIndex = prev.findIndex(msg => msg.id === activeMessageId);
-          if (targetIndex >= 0) {
-            const next = [...prev];
-            next[targetIndex] = { ...next[targetIndex], text: message, agent: timeoutProvider };
-            return next;
-          }
-        }
-        return [...prev, { id: nextId.current++, role: 'jarvis', text: message, agent: timeoutProvider }];
+      setStreamStatus({
+        provider: timeoutProvider,
+        phase: 'heartbeat',
+        detail: streamedResponseRef.current.trim() ? 'still working' : 'waiting for output',
       });
-      setActiveStreamingMessage(null);
-      setStreamStatus(null);
-      scheduleListeningResume(400);
+      busyRef.current = true;
+      setBusy(true);
+      startResponseTimer(timeoutProvider);
     }, 45000);
   };
 
@@ -801,8 +1077,8 @@ export default function App() {
     if (browserRecognitionRef.current) {
       try { browserRecognitionRef.current.stop(); } catch {}
     }
-    const jarvis = (window as any).jarvis;
-    jarvis?.stopSpeechRecognition?.();
+    const lexoire = window.lexoire;
+    lexoire?.stopSpeechRecognition?.();
     listeningRef.current = false;
     setListening(false);
   };
@@ -842,12 +1118,13 @@ export default function App() {
       const trimmedInterim = interimText.trim();
 
       if (trimmedFinal) {
-        if (isSpeechInterruptCommand(trimmedFinal) && (speechActiveRef.current || speechQueueRef.current.length > 0 || isSpeaking)) {
-          stopCurrentSpeech();
+        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
           browserSpeechFinalRef.current = '';
           return;
         }
-        if (speechActiveRef.current && !shouldTreatAsBargeIn(trimmedFinal, true)) {
+        // Post-TTS echo guard: discard transcript if it looks like the mic picked up the app's own voice
+        if (Date.now() < postSpeechEchoGuardRef.current && isLikelySpeechEcho(trimmedFinal)) {
+          console.log('[SPEECH] Post-TTS echo suppressed (browser):', trimmedFinal.slice(0, 40));
           return;
         }
         browserSpeechFinalRef.current = [browserSpeechFinalRef.current, trimmedFinal].filter(Boolean).join(' ');
@@ -857,11 +1134,11 @@ export default function App() {
         setInterim('');
         interimRef.current = '';
       } else if (trimmedInterim) {
-        if (isSpeechInterruptCommand(trimmedInterim) && (speechActiveRef.current || speechQueueRef.current.length > 0 || isSpeaking)) {
-          stopCurrentSpeech();
+        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
           return;
         }
-        if (speechActiveRef.current && !shouldTreatAsBargeIn(trimmedInterim, false)) {
+        // Post-TTS echo guard: suppress interim echo
+        if (Date.now() < postSpeechEchoGuardRef.current && isLikelySpeechEcho(trimmedInterim)) {
           return;
         }
         setInterim(trimmedInterim);
@@ -883,7 +1160,7 @@ export default function App() {
         clearListeningRestartTimer();
         if (!micPermissionNoticeRef.current) {
           micPermissionNoticeRef.current = true;
-          addMsg('jarvis', '[ERROR] Microphone permission is blocked. Enable microphone access for Lexoire, then restart the app.');
+          addMsg('assistant', '[ERROR] Microphone permission is blocked. Enable microphone access for Lexoire, then restart the app.');
         }
       }
     };
@@ -921,7 +1198,7 @@ export default function App() {
     const started = startBrowserSpeech();
     if (!started && !speechUnavailableNoticeRef.current) {
       speechUnavailableNoticeRef.current = true;
-      addMsg('jarvis', '[ERROR] Speech recognition is unavailable on this platform right now. Browser speech APIs are not available in this runtime yet.');
+      addMsg('assistant', '[ERROR] Speech recognition is unavailable on this platform right now. Browser speech APIs are not available in this runtime yet.');
     }
   };
 
@@ -929,18 +1206,19 @@ export default function App() {
     if (mutedRef.current || micPermissionRef.current === 'denied' || listeningRef.current || browserRecognitionRef.current) return;
     suppressRecognitionResumeRef.current = false;
 
-    const jarvis = (window as any).jarvis;
+    const lexoire = window.lexoire;
 
-    Promise.resolve(jarvis?.getVoiceCapabilities?.())
+    Promise.resolve(lexoire?.getVoiceCapabilities?.())
       .catch(() => null)
       .then((capabilities: VoiceCapabilities | null | undefined) => {
-        const nativeSpeechSupported = capabilities?.nativeSpeechRecognition ?? (jarvis?.platform === 'darwin' && Boolean(jarvis?.startSpeech));
+        const startNativeSpeech = lexoire?.startSpeech;
+        const nativeSpeechSupported = capabilities?.nativeSpeechRecognition ?? (lexoire?.platform === 'darwin' && Boolean(startNativeSpeech));
 
-        if (!nativeSpeechSupported || !jarvis?.startSpeech) {
+        if (!nativeSpeechSupported || !startNativeSpeech) {
           return startBrowserSpeechFallback(nativeSpeechSupported ? undefined : 'Native speech recognition unavailable; using browser fallback.');
         }
 
-        return jarvis.requestMic?.()
+        return lexoire.requestMic?.()
           .then((allowed: boolean) => {
             if (!allowed) {
               micPermissionRef.current = 'denied';
@@ -949,26 +1227,26 @@ export default function App() {
               clearListeningRestartTimer();
               if (!micPermissionNoticeRef.current) {
                 micPermissionNoticeRef.current = true;
-                addMsg('jarvis', '[ERROR] Microphone permission is blocked. Enable Microphone and Speech Recognition in System Settings > Privacy & Security, then restart Lexoire.');
+                addMsg('assistant', '[ERROR] Microphone permission is blocked. Enable Microphone and Speech Recognition in System Settings > Privacy & Security, then restart Lexoire.');
               }
               return;
             }
 
             micPermissionRef.current = 'granted';
             setMicPermission('granted');
-            // Optimistically show listening — confirmed by JARVIS_READY, reverted on error
+            // Optimistically show listening — confirmed by LEXOIRE_READY, reverted on error
             listeningRef.current = true;
             setListening(true);
-            // Safety timeout: if JARVIS_READY hasn't fired after 5s, fall back to browser speech
+            // Safety timeout: if LEXOIRE_READY hasn't fired after 5s, fall back to browser speech
             clearSwiftTimeout();
             swiftStartTimeoutRef.current = window.setTimeout(() => {
               swiftStartTimeoutRef.current = null;
-              console.warn('[SPEECH] Swift JARVIS_READY timeout — falling back to browser speech');
+              console.warn('[SPEECH] Swift LEXOIRE_READY timeout — falling back to browser speech');
               listeningRef.current = false;
               setListening(false);
               void startBrowserSpeechFallback();
             }, 5000);
-            jarvis.startSpeech().catch((err: unknown) => {
+            startNativeSpeech().catch((err: unknown) => {
               clearSwiftTimeout();
               listeningRef.current = false;
               setListening(false);
@@ -983,7 +1261,7 @@ export default function App() {
             clearListeningRestartTimer();
             if (!micPermissionNoticeRef.current) {
               micPermissionNoticeRef.current = true;
-              addMsg('jarvis', `[ERROR] Unable to request microphone permission: ${err instanceof Error ? err.message : String(err)}`);
+              addMsg('assistant', `[ERROR] Unable to request microphone permission: ${err instanceof Error ? err.message : String(err)}`);
             }
           });
       });
@@ -992,12 +1270,15 @@ export default function App() {
   const scheduleListeningResume = (delay = 220) => {
     clearListeningRestartTimer();
     if (mutedRef.current || micPermissionRef.current === 'denied') return;
+    // Don't start mic before the echo guard expires — prevents speaker pickup
+    const guardRemaining = Math.max(0, postSpeechEchoGuardRef.current - Date.now());
+    const actualDelay = guardRemaining > 0 ? Math.max(delay, guardRemaining + 150) : delay;
     listeningRestartTimer.current = window.setTimeout(() => {
       listeningRestartTimer.current = null;
       if (!mutedRef.current && micPermissionRef.current !== 'denied' && !listeningRef.current && !browserRecognitionRef.current) {
         startListening();
       }
-    }, delay);
+    }, actualDelay);
   };
 
   const getSoundContext = async () => {
@@ -1013,11 +1294,6 @@ export default function App() {
   };
 
   const playBubbleCue = async () => {
-    if (mutedRef.current) {
-      scheduleListeningResume();
-      return;
-    }
-
     speechActiveRef.current = true;
     setIsSpeaking(true);
     setInterim('');
@@ -1061,13 +1337,12 @@ export default function App() {
       window.setTimeout(() => {
         speechActiveRef.current = false;
         setIsSpeaking(false);
-        scheduleListeningResume(700);
+        scheduleListeningResume(1800);
       }, 460);
     }
   };
 
   const playSendCue = async () => {
-    if (mutedRef.current) return;
     try {
       const ctx = await getSoundContext();
       if (!ctx) return;
@@ -1201,9 +1476,22 @@ export default function App() {
   };
 
   const enqueueQueuedPrompt = (prompt: string, queuedAgent: Agent, sessionId?: string) => {
+    const normalizedPrompt = prompt.trim();
+    if (!normalizedPrompt) return;
+    const lastQueued = promptQueueRef.current[promptQueueRef.current.length - 1];
+    if (lastQueued && lastQueued.agent === queuedAgent && lastQueued.sessionId === sessionId) {
+      const mergedPrompt = `${lastQueued.prompt.trim()}\n\n${normalizedPrompt}`.trim();
+      lastQueued.prompt = mergedPrompt;
+      lastQueued.createdAt = Date.now();
+      if (editingQueuedPromptId === lastQueued.id) {
+        setEditingQueuedPromptText(mergedPrompt);
+      }
+      syncQueuedPromptState();
+      return;
+    }
     promptQueueRef.current.push({
       id: nextId.current++,
-      prompt,
+      prompt: normalizedPrompt,
       agent: queuedAgent,
       sessionId,
       createdAt: Date.now(),
@@ -1247,12 +1535,14 @@ export default function App() {
   };
 
   const clearQueuedPrompts = () => {
+    clearQueuedPromptDispatchTimer();
     promptQueueRef.current = [];
     clearQueuedPromptEditor();
     syncQueuedPromptState();
   };
 
   const sendQueuedPromptNow = (id: number) => {
+    clearQueuedPromptDispatchTimer();
     const queuedPrompt = takeQueuedPrompt(id);
     if (!queuedPrompt) return;
     if (busyRef.current) {
@@ -1264,12 +1554,18 @@ export default function App() {
   };
 
   const processNextQueuedPrompt = () => {
-    if (busyRef.current) return;
-    const nextPrompt = promptQueueRef.current.shift();
-    syncQueuedPromptState();
-    if (nextPrompt) {
-      window.setTimeout(() => dispatchPrompt(nextPrompt.prompt, false, nextPrompt.agent, nextPrompt.sessionId), 120);
-    }
+    if (busyRef.current || queuedPromptDispatchTimerRef.current !== null) return;
+    const nextPrompt = promptQueueRef.current[0];
+    if (!nextPrompt) return;
+    queuedPromptDispatchTimerRef.current = window.setTimeout(() => {
+      queuedPromptDispatchTimerRef.current = null;
+      if (busyRef.current) return;
+      const queuedNow = promptQueueRef.current[0];
+      if (!queuedNow || queuedNow.id !== nextPrompt.id) return;
+      promptQueueRef.current.shift();
+      syncQueuedPromptState();
+      dispatchPrompt(queuedNow.prompt, false, queuedNow.agent, queuedNow.sessionId);
+    }, 120);
   };
 
   const getLocalResponse = (cmd: string) => {
@@ -1279,7 +1575,7 @@ export default function App() {
       .replace(/\s+/g, ' ')
       .trim();
 
-    if (/^(yo|hey|hi|hello|sup|what's up|whats up|jarvis|hey jarvis|yo jarvis|lexoire|hey lexoire|yo lexoire)$/.test(normalized)) {
+    if (/^(yo|hey|hi|hello|sup|what's up|whats up|lexoire|hey lexoire|yo lexoire)$/.test(normalized)) {
       return 'I hear you.';
     }
 
@@ -1308,14 +1604,6 @@ export default function App() {
       .replace(/[^\w\s']/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
-
-    if (isSpeechInterruptCommand(normalized)) {
-      if (!speechActiveRef.current && speechQueueRef.current.length === 0 && !isSpeaking) {
-        return false;
-      }
-      stopCurrentSpeech();
-      return true;
-    }
 
     if (/^(clear queue|clear pending|cancel queue|cancel pending|unsend pending|drop queue|drop pending)$/.test(normalized)) {
       if (promptQueueRef.current.length === 0) {
@@ -1359,10 +1647,11 @@ export default function App() {
     targetAgent?: Agent,
     targetSessionId?: string
   ) => {
+    clearQueuedPromptDispatchTimer();
     if (!socketRef.current?.connected) {
       console.warn('[SEND] Skipping: socket disconnected');
       if (!userBubbleAlreadyExists) addMsg('user', cmd);
-      setMsgs(prev => [...prev, { id: nextId.current++, role: 'jarvis', text: '[ERROR] Backend disconnected. Relaunch Lexoire.' }]);
+      setMsgs(prev => [...prev, { id: nextId.current++, role: 'assistant', text: '[ERROR] Backend disconnected. Relaunch Lexoire.', createdAt: Date.now() }]);
       socketRef.current?.connect?.();
       return;
     }
@@ -1380,11 +1669,13 @@ export default function App() {
     hasSpeechStreamedRef.current = false;
     suppressCurrentResponseSpeechRef.current = false;
     resetSpokenTextMemory();
+    resetInterruptionCandidate();
+    activeResponseAgentRef.current = provider;
     const streamingMessageId = nextId.current++;
     setActiveStreamingMessage(streamingMessageId);
     setStreamStatus({ provider, phase: 'start', detail: 'awaiting response' });
     // Add placeholder bubble tagged with current agent
-    setMsgs(prev => [...prev, { id: streamingMessageId, role: 'jarvis', text: '', agent: provider }]);
+    setMsgs(prev => [...prev, { id: streamingMessageId, role: 'assistant', text: '', agent: provider, createdAt: Date.now() }]);
     playSendCue();
 
     const lower = cmd.toLowerCase();
@@ -1426,7 +1717,7 @@ export default function App() {
     const localResponse = getLocalResponse(cmd);
     if (localResponse) {
       addMsg('user', cmd);
-      addMsg('jarvis', localResponse);
+      addMsg('assistant', localResponse);
       _speak(localResponse);
       return;
     }
@@ -1460,22 +1751,17 @@ export default function App() {
     const next = !mutedRef.current;
     mutedRef.current = next;
     setMuted(next);
-    clearSilenceTimer();
     if (next) {
       stopListening();
-      setInterim('');
-      setDraft('');
-      draftRef.current = '';
-      interruptSpeechPlayback();
-      suppressCurrentResponseSpeechRef.current = false;
-      resetSpokenTextMemory();
       return;
     }
     scheduleListeningResume(120);
   };
 
   const clearChat = () => {
-    setMsgs([{ id: nextId.current++, role: 'jarvis', text: 'Chat cleared.' }]);
+    conversationIdRef.current = `conv-${Date.now()}`;
+    conversationCreatedAtRef.current = Date.now();
+    setMsgs([{ id: nextId.current++, role: 'assistant', text: 'Chat cleared.', createdAt: Date.now() }]);
   };
 
   const playNextSpeech = () => {
@@ -1497,20 +1783,24 @@ export default function App() {
     stopListening();
 
     const finish = () => {
+      // 3 s echo guard — browser speechSynthesis.onend fires early on macOS,
+      // so audio can still be playing when this callback runs.
+      postSpeechEchoGuardRef.current = Date.now() + 3000;
+
       if (!speechActiveRef.current && speechQueueRef.current.length === 0) {
-        currentSpokenTextRef.current = '';
+        window.setTimeout(() => { currentSpokenTextRef.current = ''; }, 3000);
         setIsSpeaking(false);
-        scheduleListeningResume(120);
+        scheduleListeningResume(1800);
         return;
       }
-      currentSpokenTextRef.current = '';
       speechActiveRef.current = false;
       setIsSpeaking(false);
       if (speechQueueRef.current.length > 0) {
         playNextSpeech();
         return;
       }
-      scheduleListeningResume(220);
+      window.setTimeout(() => { currentSpokenTextRef.current = ''; }, 3000);
+      scheduleListeningResume(1800);
     };
 
     if (window.speechSynthesis) {
@@ -1539,9 +1829,9 @@ export default function App() {
       return;
     }
 
-    const jarvis = (window as any).jarvis;
-    if (jarvis?.speak) {
-      Promise.resolve(jarvis.speak({ text: next, mode: voiceModeRef.current })).then(finish).catch(finish);
+    const lexoire = window.lexoire;
+    if (lexoire?.speak) {
+      Promise.resolve(lexoire.speak({ text: next, mode: voiceModeRef.current })).then(finish).catch(finish);
       return;
     }
 
@@ -1549,10 +1839,25 @@ export default function App() {
   };
 
   const _speak = (text: string) => {
-    if (mutedRef.current || !voiceRepliesRef.current) return;
-    const clean = stripSpeechMarkup(text).replace(/[▶◀◉⚠]/g, '').trim().substring(0, 400);
+    if (!voiceRepliesRef.current) return;
+    const clean = stripSpeechMarkup(text).replace(/[▶◀◉⚠]/g, '').trim();
     if (!clean) return;
-    speechQueueRef.current.push(clean);
+    // Split into sentence segments so long responses are fully spoken, not truncated.
+    // Cap total spoken content at ~1500 chars to avoid reading enormous outputs forever.
+    const capped = clean.length > 1500 ? clean.substring(0, 1500) : clean;
+    const segments = capped.match(/[^.!?\n]+[.!?\n]+/g) ?? [capped];
+    let queued = 0;
+    for (const seg of segments) {
+      const s = seg.trim();
+      if (s && queued < 8) {
+        speechQueueRef.current.push(s);
+        queued++;
+      }
+    }
+    // Handle trailing text with no sentence terminator
+    if (queued === 0 && capped.trim()) {
+      speechQueueRef.current.push(capped);
+    }
     setSpeechQueueCount(speechQueueRef.current.length);
     if (!speechActiveRef.current) playNextSpeech();
   };
@@ -1563,6 +1868,10 @@ export default function App() {
   const autoSendSeconds = ((SILENCE_MS * (1 - silencePct / 100)) / 1000).toFixed(1);
   const liveLabel = micPermission === 'denied' ? 'NO MIC' : muted ? 'MUTED' : isSpeaking ? 'SPEAKING' : listening ? 'LIVE' : 'IDLE';
   const liveColor = micPermission === 'denied' ? '#ff9650' : muted ? '#ff4444' : isSpeaking ? '#7ad7ff' : listening ? '#10ff50' : '#10ff5040';
+  const activeResponseAgent = activeResponseAgentRef.current ?? streamStatus?.provider ?? null;
+  const processingAgent = activeResponseAgent ?? agent;
+  const liveResponseGlow = 0.25 + audioLevel * 0.85;
+  const sphereGlow = 0.18 + audioLevel * 0.9;
 
   return (
     <div style={{
@@ -1602,7 +1911,7 @@ export default function App() {
         padding: '12px 80px 12px 20px',
         borderBottom: '1px solid #10ff5015',
         background: 'linear-gradient(135deg, rgba(1, 30, 12, 0.8), rgba(5, 20, 8, 0.6))',
-        display: 'flex', alignItems: 'center', gap: 16,
+        display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
         backdropFilter: 'blur(20px)',
         position: 'sticky',
         top: 0,
@@ -1612,7 +1921,7 @@ export default function App() {
         <span style={{ fontSize: 10, letterSpacing: 4, color: '#10ff5060', textTransform: 'uppercase' }}>AI ORCHESTRATOR</span>
 
         {/* ── Agent selector ── */}
-        <div style={{ display: 'flex', gap: 2, marginLeft: 20, background: 'rgba(0,0,0,0.4)', borderRadius: 8, padding: 3, border: '1px solid #ffffff10' }}>
+        <div style={{ display: 'flex', gap: 2, marginLeft: 20, background: 'rgba(0,0,0,0.4)', borderRadius: 8, padding: 3, border: '1px solid #ffffff10', flexWrap: 'wrap' }}>
           {(['copilot', 'claude', 'codex'] as Agent[]).map(ag => {
             const c = AGENT_COLORS[ag];
             const active = agent === ag;
@@ -1635,7 +1944,7 @@ export default function App() {
           })}
         </div>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, position: 'relative' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, position: 'relative', flexWrap: 'wrap', justifyContent: 'flex-end', flex: '1 1 360px' }}>
           <button onClick={() => setSessionDropdownOpen(v => !v)} style={{
             background: 'linear-gradient(135deg, rgba(16, 255, 80, 0.12), rgba(0, 204, 120, 0.05))',
             border: '1px solid #10ff5030',
@@ -1667,10 +1976,10 @@ export default function App() {
                 textTransform: 'uppercase',
               }}
             >
-              Interrupt
+              Silence
             </button>
           )}
-          {busy && <span style={{ fontSize: 10, letterSpacing: 2, color: AGENT_COLORS[agent].text, animation: 'pulse 1s infinite', textTransform: 'uppercase' }}>{AGENT_COLORS[agent].label} PROCESSING</span>}
+          {busy && <span style={{ fontSize: 10, letterSpacing: 2, color: AGENT_COLORS[processingAgent].text, animation: 'pulse 1s infinite', textTransform: 'uppercase' }}>{AGENT_COLORS[processingAgent].label} PROCESSING</span>}
           <span style={{ fontSize: 10, letterSpacing: 2, color: liveColor, textTransform: 'uppercase', animation: (listening || isSpeaking) ? 'pulse 1.2s ease-in-out infinite' : 'none' }}>
             {liveLabel}
           </span>
@@ -1726,7 +2035,7 @@ export default function App() {
             speechRateRef.current = defaultRate;
             setSpeechRate(defaultRate);
             window.speechSynthesis?.cancel?.();
-            (window as any).jarvis?.stopSpeech?.();
+            window.lexoire?.stopSpeech?.();
           }} style={{
             background: voiceMode === 'hifi'
               ? 'linear-gradient(135deg, rgba(16, 255, 80, 0.10), rgba(122, 215, 255, 0.08))'
@@ -2063,14 +2372,15 @@ export default function App() {
       </div>
 
       {/* ── Body: sphere on top, chat below ── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {/* ── Sphere (top center, fixed height) ── */}
         <div style={{
-          flexShrink: 0, height: 320,
+          flexShrink: 0, height: 380,
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          background: 'linear-gradient(180deg, #040c06 0%, #030806 100%)',
+          background: 'radial-gradient(circle at 50% 35%, rgba(28, 255, 163, 0.14), rgba(4, 12, 6, 0.96) 42%, #030806 100%)',
           borderBottom: '1px solid #10ff5012',
           position: 'relative',
+          boxShadow: `inset 0 0 ${24 + audioLevel * 90}px rgba(24, 255, 170, ${0.08 + sphereGlow * 0.18})`,
         }}>
           <div style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}>
             <Sphere listening={listening} muted={muted} audioLevel={audioLevel} audioFrequencies={audioFrequencies} speechVelocity={speechVelocityRef.current} />
@@ -2095,20 +2405,20 @@ export default function App() {
         </div>
 
         {/* ── Chat + input ── */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'linear-gradient(180deg, #030806, #05140a)' }}>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'linear-gradient(180deg, #030806, #05140a)' }}>
           {/* Messages ── */}
           <div style={{
-            flex: 1, overflow: 'auto', padding: '20px 16px',
+            flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 16px',
             display: 'flex', flexDirection: 'column', gap: 12,
             scrollbarWidth: 'thin',
           }}>
-            {msgs.filter(m => m.text.trim() || (busy && m.role === 'jarvis')).map(m => {
+            {msgs.filter(m => m.text.trim() || (busy && m.role === 'assistant')).map(m => {
               const ac = m.agent ? AGENT_COLORS[m.agent] : AGENT_COLORS.copilot;
-              const isStreamingBubble = m.role === 'jarvis' && m.id === activeStreamMsgId && busy;
+              const isStreamingBubble = m.role === 'assistant' && m.id === activeStreamMsgId && busy;
               const streamStatusText = isStreamingBubble ? formatStreamStatus(streamStatus?.phase, streamStatus?.detail) : '';
               return (
                 <div key={m.id} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start', gap: 3 }}>
-                  {m.role === 'jarvis' && m.agent && (
+                  {m.role === 'assistant' && m.agent && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: 4 }}>
                       <span style={{ fontSize: 8, letterSpacing: 2, color: ac.text + '99', textTransform: 'uppercase' }}>{ac.label}</span>
                       {streamStatusText && (
@@ -2116,19 +2426,48 @@ export default function App() {
                           {streamStatusText}
                         </span>
                       )}
+                      {isStreamingBubble && (
+                        <button
+                          onClick={() => {
+                            confirmAbortActiveResponse();
+                          }}
+                          style={{
+                            background: 'linear-gradient(135deg, rgba(255, 68, 68, 0.95), rgba(180, 18, 18, 0.92))',
+                            border: '1px solid #ff8888aa',
+                            color: '#fff4f4',
+                            fontFamily: 'inherit',
+                            fontSize: 8,
+                            fontWeight: 800,
+                            letterSpacing: 1.1,
+                            padding: '2px 7px',
+                            cursor: 'pointer',
+                            borderRadius: 999,
+                            textTransform: 'uppercase',
+                            boxShadow: '0 0 14px rgba(255, 68, 68, 0.28)',
+                          }}
+                        >
+                          Stop
+                        </button>
+                      )}
                     </div>
                   )}
                   <div style={{
                     maxWidth: '85%',
-                    padding: '12px 14px',
+                    padding: isStreamingBubble ? '13px 15px' : '12px 14px',
                     borderRadius: m.role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
                     background: m.role === 'user'
                       ? 'linear-gradient(135deg, #10ff2222 0%, #10cc5514 100%)'
-                      : ac.bg,
-                    border: m.role === 'user' ? '1px solid #10ff4430' : `1px solid ${ac.border}`,
+                      : isStreamingBubble
+                        ? `linear-gradient(135deg, rgba(18, 255, 152, 0.14), rgba(8, 26, 18, 0.96))`
+                        : ac.bg,
+                    border: m.role === 'user' ? '1px solid #10ff4430' : `1.5px solid ${isStreamingBubble ? '#66f7ffaa' : ac.border}`,
                     color: m.role === 'user' ? '#d4ffe0' : ac.text,
                     fontSize: 12, lineHeight: 1.6, letterSpacing: 0.2,
-                    boxShadow: m.role === 'user' ? '0 2px 10px #10ff2210' : '0 2px 6px #00000040',
+                    boxShadow: m.role === 'user'
+                      ? '0 2px 10px #10ff2210'
+                      : isStreamingBubble
+                        ? `0 0 ${12 + liveResponseGlow * 22}px rgba(102, 247, 255, ${0.12 + liveResponseGlow * 0.16}), 0 8px 18px rgba(0,0,0,0.28)`
+                        : '0 2px 6px #00000040',
                     whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                   }}>
                     {m.text.trim() ? (
@@ -2400,7 +2739,34 @@ export default function App() {
                   }}
                 >→</button>
               </div>
-              
+
+              {busy && (
+                <button
+                  onClick={() => {
+                    confirmAbortActiveResponse();
+                  }}
+                  title={`Stop ${AGENT_COLORS[processingAgent].label}`}
+                  style={{
+                    width: 40,
+                    height: 40,
+                    background: 'linear-gradient(135deg, rgba(255, 68, 68, 0.18), rgba(140, 12, 12, 0.10))',
+                    border: '1.5px solid #ff444466',
+                    color: '#ffb3b3',
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                    fontSize: 14,
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'all 0.2s ease',
+                    boxShadow: '0 0 10px rgba(255, 68, 68, 0.22)',
+                  }}
+                >
+                  X
+                </button>
+              )}
+               
               {/* Broadcast Button ── */}
               <button
                 onClick={() => broadcast()}
@@ -2418,7 +2784,10 @@ export default function App() {
                 }}
               >📡</button>
             </div>
-            <div style={{ minHeight: 12, fontSize: 8, letterSpacing: 2, color: '#10ff4460', textAlign: 'right', textTransform: 'uppercase' }}>
+            <div style={{ minHeight: 12, fontSize: 8, letterSpacing: 2, color: '#10ff4460', textAlign: 'right', textTransform: 'uppercase', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <span style={{ opacity: busy ? 1 : 0, transition: 'opacity 0.16s ease', color: '#ffb3b3' }}>
+                UI BUTTON TO STOP {AGENT_COLORS[processingAgent].label}
+              </span>
               <span style={{ opacity: autoSendActive ? 1 : 0, transition: 'opacity 0.16s ease' }}>
                 AUTO-SEND {autoSendSeconds}s
               </span>

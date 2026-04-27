@@ -2,7 +2,7 @@
  * INTEGRATION GUIDE: Multi-Session Dashboard
  * 
  * This guide shows how to integrate the new multi-session UI components
- * into the existing JARVIS application.
+ * into the existing Lexoire application.
  * 
  * Components:
  * - MultiSessionDashboard: Main layout container

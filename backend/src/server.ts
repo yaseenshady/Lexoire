@@ -70,9 +70,9 @@ type InstalledVoice = {
 };
 
 const PORT = Number.parseInt(process.env.PORT || `${DEFAULT_PORT}`, 10);
-const STRICT_PORT = process.env.JARVIS_STRICT_PORT === '1';
+const STRICT_PORT = process.env.LEXOIRE_STRICT_PORT === '1';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN?.trim() || DEFAULT_FRONTEND_ORIGIN;
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../jarvis.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../lexoire.db');
 
 const app = express();
 const httpServer = createServer(app);
@@ -982,6 +982,19 @@ type CopilotPromptJob = {
 
 const copilotPromptQueue: CopilotPromptJob[] = [];
 let copilotPromptWorkerRunning = false;
+const AGENT_HEARTBEAT_MS = 12000;
+
+function startAgentHeartbeat(socket: any, provider: 'copilot' | 'claude' | 'codex') {
+  const interval = setInterval(() => {
+    (socket as any).emit('agent:status', {
+      provider,
+      phase: 'heartbeat',
+      detail: 'still working',
+    });
+  }, AGENT_HEARTBEAT_MS);
+
+  return () => clearInterval(interval);
+}
 
 async function processCopilotPromptJob(job: CopilotPromptJob): Promise<void> {
   const { socket, prompt, sessionId: sid } = job;
@@ -990,8 +1003,9 @@ async function processCopilotPromptJob(job: CopilotPromptJob): Promise<void> {
   let chunkCount = 0;
   const session = sid ? sessionManager.getSession(sid) : null;
   const effectivePrompt = session ? buildProviderPrompt(session, 'copilot', prompt) : prompt;
-  if (session) ensureSessionContext(session);
+  const stopHeartbeat = startAgentHeartbeat(socket, 'copilot');
   try {
+    if (session) ensureSessionContext(session);
     const response = await copilotService.execute(
       { prompt: effectivePrompt, workingDirectory: session?.repoPath || process.cwd(), sessionId: session?.id } as any,
       (chunk, type) => {
@@ -1001,6 +1015,17 @@ async function processCopilotPromptJob(job: CopilotPromptJob): Promise<void> {
         socket.emit('command:chunk', { chunk });
       }
     );
+    if (response.aborted) {
+      logger.copilot(`Aborted prompt. chunks=${chunkCount}`);
+      socket.emit('agent:status', { provider: 'copilot', phase: 'aborted', detail: 'user interrupted' });
+      socket.emit('command:response', {
+        result: response.output.trim() || '(interrupted)',
+        sessionId: session?.id || response.sessionId,
+        aborted: true,
+        suppressSpeech: true,
+      });
+      return;
+    }
     if (session) {
       appendSessionProgress(session, 'copilot', prompt, response.output);
     }
@@ -1015,6 +1040,8 @@ async function processCopilotPromptJob(job: CopilotPromptJob): Promise<void> {
     logger.error('Copilot prompt failed:', err.message);
     socket.emit('agent:status', { provider: 'copilot', phase: 'error', detail: err.message });
     socket.emit('command:response', { result: `Error: ${err.message}` });
+  } finally {
+    stopHeartbeat();
   }
 }
 
@@ -1100,10 +1127,7 @@ io.on('connection', (socket) => {
     const aborted = copilotService.abort();
     if (aborted) {
       logger.warning('Command aborted by user');
-      socket.emit('copilot:output', {
-        chunk: '\n[Command aborted by user]\n',
-        type: 'stderr'
-      });
+      (socket as any).emit('agent:status', { provider: 'copilot', phase: 'aborted', detail: 'user interrupted' });
     }
   });
 
@@ -1318,7 +1342,7 @@ io.on('connection', (socket) => {
         case 'status': {
           const sid = copilotService.getMasterSessionId();
           (socket as any).emit('command:response', {
-            result: `Session: ${sid || 'none (will create on next prompt)'}\nFile: .github/JARVIS_SESSION.md`,
+            result: `Session: ${sid || 'none (will create on next prompt)'}\nFile: .github/LEXOIRE_SESSION.md`,
           });
           break;
         }
@@ -1330,7 +1354,7 @@ io.on('connection', (socket) => {
         case 'list_sessions': {
           const sid = copilotService.getMasterSessionId();
           (socket as any).emit('command:response', {
-            result: `Master session: ${sid || 'none'}\nTracked in: .github/JARVIS_SESSION.md`,
+            result: `Master session: ${sid || 'none'}\nTracked in: .github/LEXOIRE_SESSION.md`,
           });
           break;
         }
@@ -1362,24 +1386,42 @@ io.on('connection', (socket) => {
       });
       return;
     }
+    let stopHeartbeat: (() => void) | null = null;
     try {
       (socket as any).emit('agent:status', { provider: 'claude', phase: 'start', detail: prompt.slice(0, 80) });
+      stopHeartbeat = startAgentHeartbeat(socket, 'claude');
       if (session) ensureSessionContext(session);
       const response = await claudeService.prompt(effectivePrompt, agentSession, (chunk) => {
         (socket as any).emit('agent:status', { provider: 'claude', phase: 'chunk', detail: `${chunk.length} chars` });
         (socket as any).emit('claude:chunk', { chunk });
       });
-      if (session) appendSessionProgress(session, 'claude', prompt, response);
-      (socket as any).emit('agent:status', { provider: 'claude', phase: 'complete', detail: `${response.length} chars` });
-      (socket as any).emit('claude:response', { result: response || '(no output)', sessionId: session?.id });
+      if (response.aborted) {
+        (socket as any).emit('agent:status', { provider: 'claude', phase: 'aborted', detail: 'user interrupted' });
+        (socket as any).emit('claude:response', {
+          result: response.text || '(interrupted)',
+          sessionId: session?.id,
+          aborted: true,
+          suppressSpeech: true,
+        });
+        return;
+      }
+      if (session) appendSessionProgress(session, 'claude', prompt, response.text);
+      (socket as any).emit('agent:status', { provider: 'claude', phase: 'complete', detail: `${response.text.length} chars` });
+      (socket as any).emit('claude:response', { result: response.text || '(no output)', sessionId: session?.id });
     } catch (err: any) {
       console.error('[SOCKET] Claude error:', err.message);
       (socket as any).emit('agent:status', { provider: 'claude', phase: 'error', detail: err.message });
       (socket as any).emit('claude:response', { result: `Claude error: ${err.message}` });
+    } finally {
+      stopHeartbeat?.();
     }
   });
 
-  (socket as any).on('claude:abort', () => { claudeService.abort(); });
+  (socket as any).on('claude:abort', () => {
+    if (claudeService.abort()) {
+      (socket as any).emit('agent:status', { provider: 'claude', phase: 'aborted', detail: 'user interrupted' });
+    }
+  });
   (socket as any).on('claude:new-session', ({ sessionId: sid }: { sessionId?: string }) => {
     claudeService.clearHistory(sid || socket.id);
     (socket as any).emit('claude:response', { result: 'Claude session cleared.' });
@@ -1399,24 +1441,42 @@ io.on('connection', (socket) => {
       });
       return;
     }
+    let stopHeartbeat: (() => void) | null = null;
     try {
       (socket as any).emit('agent:status', { provider: 'codex', phase: 'start', detail: prompt.slice(0, 80) });
+      stopHeartbeat = startAgentHeartbeat(socket, 'codex');
       if (session) ensureSessionContext(session);
       const response = await codexService.prompt(effectivePrompt, agentSession, (chunk) => {
         (socket as any).emit('agent:status', { provider: 'codex', phase: 'chunk', detail: `${chunk.length} chars` });
         (socket as any).emit('codex:chunk', { chunk });
       });
-      if (session) appendSessionProgress(session, 'codex', prompt, response);
-      (socket as any).emit('agent:status', { provider: 'codex', phase: 'complete', detail: `${response.length} chars` });
-      (socket as any).emit('codex:response', { result: response || '(no output)', sessionId: session?.id });
+      if (response.aborted) {
+        (socket as any).emit('agent:status', { provider: 'codex', phase: 'aborted', detail: 'user interrupted' });
+        (socket as any).emit('codex:response', {
+          result: response.text || '(interrupted)',
+          sessionId: session?.id,
+          aborted: true,
+          suppressSpeech: true,
+        });
+        return;
+      }
+      if (session) appendSessionProgress(session, 'codex', prompt, response.text);
+      (socket as any).emit('agent:status', { provider: 'codex', phase: 'complete', detail: `${response.text.length} chars` });
+      (socket as any).emit('codex:response', { result: response.text || '(no output)', sessionId: session?.id });
     } catch (err: any) {
       console.error('[SOCKET] Codex error:', err.message);
       (socket as any).emit('agent:status', { provider: 'codex', phase: 'error', detail: err.message });
       (socket as any).emit('codex:response', { result: `Codex error: ${err.message}` });
+    } finally {
+      stopHeartbeat?.();
     }
   });
 
-  (socket as any).on('codex:abort', () => { codexService.abort(); });
+  (socket as any).on('codex:abort', () => {
+    if (codexService.abort()) {
+      (socket as any).emit('agent:status', { provider: 'codex', phase: 'aborted', detail: 'user interrupted' });
+    }
+  });
   (socket as any).on('codex:new-session', ({ sessionId: sid }: { sessionId?: string }) => {
     codexService.clearHistory(sid || socket.id);
     (socket as any).emit('codex:response', { result: 'Codex session cleared.' });

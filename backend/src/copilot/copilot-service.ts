@@ -19,8 +19,7 @@ function resolveCopilotBinary(): string {
   return candidates[candidates.length - 1];
 }
 
-const SESSION_FILE = resolve(process.cwd(), '.github', 'JARVIS_SESSION.md');
-const LEGACY_SESSION_FILE = resolve(__dirname, '../../..', '.github', 'JARVIS_SESSION.md');
+const SESSION_FILE = resolve(process.cwd(), '.github', 'LEXOIRE_SESSION.md');
 
 function ensureDir(file: string) {
   const dir = dirname(file);
@@ -29,13 +28,10 @@ function ensureDir(file: string) {
 
 function loadSessionId(): string | undefined {
   try {
-    const candidates = [SESSION_FILE, LEGACY_SESSION_FILE];
-    for (const file of candidates) {
-      if (!existsSync(file)) continue;
-      const content = readFileSync(file, 'utf8');
-      const match = content.match(/^session-id:\s*([a-f0-9-]{7,36})/m);
-      if (match?.[1]) return match[1];
-    }
+    if (!existsSync(SESSION_FILE)) return undefined;
+    const content = readFileSync(SESSION_FILE, 'utf8');
+    const match = content.match(/^session-id:\s*([a-f0-9-]{7,36})/m);
+    if (match?.[1]) return match[1];
     return undefined;
   } catch {
     return undefined;
@@ -47,9 +43,7 @@ function saveSessionId(sessionId: string, prompt?: string) {
   const ts = new Date().toISOString();
   const existing = existsSync(SESSION_FILE)
     ? readFileSync(SESSION_FILE, 'utf8')
-    : existsSync(LEGACY_SESSION_FILE)
-      ? readFileSync(LEGACY_SESSION_FILE, 'utf8')
-      : '';
+    : '';
   
   // Extract history section
   const historyStart = existing.indexOf('\n## History');
@@ -57,13 +51,13 @@ function saveSessionId(sessionId: string, prompt?: string) {
   const newEntry = prompt ? `\n- \`${ts}\` — ${prompt.slice(0, 80)}` : '';
   
   writeFileSync(SESSION_FILE, [
-    '# JARVIS Master Session',
+    '# LEXOIRE Master Session',
     '',
     `session-id: ${sessionId}`,
     `updated: ${ts}`,
     '',
     '> This file tracks the active Copilot session.',
-    '> JARVIS uses `--resume` with this ID on every prompt.',
+    '> LEXOIRE uses `--resume` with this ID on every prompt.',
     history.trimEnd() + newEntry,
     '',
   ].join('\n'));
@@ -79,7 +73,8 @@ export interface CopilotRuntimeStatus {
 class CopilotService {
   private currentProcess: ChildProcess | null = null;
   private masterSessionId: string | undefined;
-  private sessionIdsByJarvisSession = new Map<string, string>();
+  private sessionIdsByWorkspaceSession = new Map<string, string>();
+  private abortRequested = false;
 
   constructor(private readonly commandBinary: string = resolveCopilotBinary()) {
     this.masterSessionId = loadSessionId();
@@ -111,8 +106,9 @@ class CopilotService {
     onOutput: (chunk: string, type: 'stdout' | 'stderr') => void
   ): Promise<CopilotResponse> {
     return new Promise((resolve) => {
+      this.abortRequested = false;
       const workingDirectory = command.workingDirectory || process.cwd();
-      const jarvisSessionId = command.sessionId || 'master';
+      const workspaceSessionId = command.sessionId || 'master';
 
       // Core flags: always yolo + JSON output (no --acp, it disables stdout!)
       const args: string[] = [
@@ -122,8 +118,8 @@ class CopilotService {
       ];
 
       // Resume master session if we have one
-      const sessionId = this.sessionIdsByJarvisSession.get(jarvisSessionId)
-        || (jarvisSessionId === 'master' ? this.masterSessionId : undefined);
+      const sessionId = this.sessionIdsByWorkspaceSession.get(workspaceSessionId)
+        || (workspaceSessionId === 'master' ? this.masterSessionId : undefined);
       if (sessionId) {
         args.push(`--resume=${sessionId}`);
       }
@@ -199,21 +195,35 @@ class CopilotService {
       this.currentProcess.on('close', (code) => {
         this.currentProcess = null;
         if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
+        const wasAborted = this.abortRequested;
+        this.abortRequested = false;
+
+        if (wasAborted) {
+          resolve({
+            success: false,
+            output: output.trim(),
+            error: 'Command aborted by user',
+            exitCode: 130,
+            sessionId: this.masterSessionId,
+            aborted: true,
+          });
+          return;
+        }
 
         if (code !== 0 || (errorOutput && !output.trim())) {
           // Failed — clear stale session so next prompt starts fresh
           console.warn(`[CopilotService] Prompt failed (exit ${code}), clearing session. Error: ${errorOutput.slice(0, 200)}`);
           this.masterSessionId = undefined;
-          this.sessionIdsByJarvisSession.delete(jarvisSessionId);
+          this.sessionIdsByWorkspaceSession.delete(workspaceSessionId);
           ensureDir(SESSION_FILE);
-          writeFileSync(SESSION_FILE, '# JARVIS Master Session\n\nsession-id: (none — reset after failed prompt)\n');
+          writeFileSync(SESSION_FILE, '# LEXOIRE Master Session\n\nsession-id: (none — reset after failed prompt)\n');
         } else if (newSessionId) {
           this.masterSessionId = newSessionId;
-          this.sessionIdsByJarvisSession.set(jarvisSessionId, newSessionId);
+          this.sessionIdsByWorkspaceSession.set(workspaceSessionId, newSessionId);
           saveSessionId(newSessionId, command.prompt);
           console.log(`[CopilotService] Session saved: ${newSessionId}`);
         } else if (sessionId && output.trim()) {
-          this.sessionIdsByJarvisSession.set(jarvisSessionId, sessionId);
+          this.sessionIdsByWorkspaceSession.set(workspaceSessionId, sessionId);
           saveSessionId(sessionId, command.prompt);
         }
 
@@ -228,6 +238,19 @@ class CopilotService {
 
       this.currentProcess.on('error', (error) => {
         this.currentProcess = null;
+        const wasAborted = this.abortRequested;
+        this.abortRequested = false;
+        if (wasAborted) {
+          resolve({
+            success: false,
+            output: output.trim(),
+            error: 'Command aborted by user',
+            exitCode: 130,
+            sessionId: this.masterSessionId,
+            aborted: true,
+          });
+          return;
+        }
         resolve({ success: false, output, error: error.message, exitCode: 1, sessionId: this.masterSessionId });
       });
     });
@@ -235,16 +258,16 @@ class CopilotService {
 
   newSession() {
     this.masterSessionId = undefined;
-    this.sessionIdsByJarvisSession.clear();
+    this.sessionIdsByWorkspaceSession.clear();
     ensureDir(SESSION_FILE);
-    writeFileSync(SESSION_FILE, '# JARVIS Master Session\n\nsession-id: (none — will be set on next prompt)\n');
+    writeFileSync(SESSION_FILE, '# LEXOIRE Master Session\n\nsession-id: (none — will be set on next prompt)\n');
     console.log('[CopilotService] Session cleared — next prompt starts fresh');
   }
 
   abort(): boolean {
     if (!this.currentProcess) return false;
+    this.abortRequested = true;
     this.currentProcess.kill('SIGTERM');
-    this.currentProcess = null;
     return true;
   }
 

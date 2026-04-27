@@ -55,6 +55,7 @@ export interface CopilotResponse {
   error?: string;
   exitCode: number;
   sessionId?: string;
+  aborted?: boolean;
 }
 
 export interface VoiceCommand {
