@@ -11,6 +11,10 @@ type VoiceCapabilities = {
   nativeSpeechRecognition: boolean;
   nativeTtsFallback: boolean;
 };
+type VoiceBackendCapabilities = {
+  backendSpeechRecognition: boolean;
+  transcriptionModels?: string[];
+};
 interface Msg { id: number; role: 'user' | 'assistant'; text: string; agent?: Agent; createdAt: number; }
 interface SavedConversationMessage {
   id: string;
@@ -68,6 +72,11 @@ const AUDIO_INPUT_CONSTRAINTS: MediaStreamConstraints = {
     channelCount: 1,
   },
 };
+const SERVER_SPEECH_START_LEVEL = 0.05;
+const SERVER_SPEECH_CONTINUE_LEVEL = 0.028;
+const SERVER_SPEECH_SEGMENT_SILENCE_MS = 850;
+const SERVER_SPEECH_MIN_RECORDING_MS = 350;
+const SERVER_SPEECH_MAX_RECORDING_MS = 15000;
 
 const ECHO_FILLER_WORDS = new Set([
   'a', 'an', 'and', 'are', 'be', 'for', 'from', 'get', 'got', 'had', 'has', 'have',
@@ -244,6 +253,18 @@ export default function App() {
   const conversationSaveTimerRef = useRef<number | null>(null);
   const queuedPromptDispatchTimerRef = useRef<number | null>(null);
   const interruptionCandidateRef = useRef<{ text: string; firstSeenAt: number; lastSeenAt: number; hits: number } | null>(null);
+  const backendSpeechCapabilitiesRef = useRef<VoiceBackendCapabilities | null>(null);
+  const backendSpeechCapabilitiesPromiseRef = useRef<Promise<VoiceBackendCapabilities> | null>(null);
+  const serverSpeechModeRef = useRef(false);
+  const serverSpeechMonitorRef = useRef<number | null>(null);
+  const serverSpeechRecorderRef = useRef<MediaRecorder | null>(null);
+  const serverSpeechChunksRef = useRef<Blob[]>([]);
+  const serverSpeechSilenceStartedAtRef = useRef<number | null>(null);
+  const serverSpeechCaptureStartedAtRef = useRef<number | null>(null);
+  const serverSpeechDiscardSegmentRef = useRef(false);
+  const serverSpeechSessionRef = useRef(0);
+  const serverSpeechErrorNoticeRef = useRef(false);
+  const serverSpeechMimeTypeRef = useRef('');
   const msgsEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const nextId = useRef(1);
@@ -348,6 +369,13 @@ export default function App() {
     }
     if (queuedPromptDispatchTimerRef.current !== null) {
       window.clearTimeout(queuedPromptDispatchTimerRef.current);
+    }
+    if (serverSpeechMonitorRef.current !== null) {
+      window.clearInterval(serverSpeechMonitorRef.current);
+    }
+    const activeRecorder = serverSpeechRecorderRef.current;
+    if (activeRecorder && activeRecorder.state !== 'inactive') {
+      try { activeRecorder.stop(); } catch {}
     }
     microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
   }, []);
@@ -459,6 +487,165 @@ export default function App() {
         }
       }
     }
+  };
+
+  const blobToBase64 = (blob: Blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to read recorded audio.'));
+    reader.onloadend = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') {
+        reject(new Error('Recorded audio could not be encoded.'));
+        return;
+      }
+      const commaIndex = result.indexOf(',');
+      resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+    };
+    reader.readAsDataURL(blob);
+  });
+
+  const resampleAudio = (samples: Float32Array, sourceRate: number, targetRate: number) => {
+    if (sourceRate === targetRate) {
+      return samples;
+    }
+
+    const outputLength = Math.max(1, Math.round(samples.length * targetRate / sourceRate));
+    const output = new Float32Array(outputLength);
+
+    for (let index = 0; index < outputLength; index += 1) {
+      const position = index * (sourceRate / targetRate);
+      const leftIndex = Math.floor(position);
+      const rightIndex = Math.min(samples.length - 1, leftIndex + 1);
+      const weight = position - leftIndex;
+      output[index] = samples[leftIndex] * (1 - weight) + samples[rightIndex] * weight;
+    }
+
+    return output;
+  };
+
+  const encodePcm16Wav = (samples: Float32Array, sampleRate: number) => {
+    const bytesPerSample = 2;
+    const blockAlign = bytesPerSample;
+    const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
+    const view = new DataView(buffer);
+    const writeString = (offset: number, value: string) => {
+      for (let index = 0; index < value.length; index += 1) {
+        view.setUint8(offset + index, value.charCodeAt(index));
+      }
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, samples.length * bytesPerSample, true);
+
+    let offset = 44;
+    for (let index = 0; index < samples.length; index += 1) {
+      const sample = Math.max(-1, Math.min(1, samples[index]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += bytesPerSample;
+    }
+
+    return buffer;
+  };
+
+  const convertBlobToWav = async (blob: Blob) => {
+    const arrayBuffer = await blob.arrayBuffer();
+    const audioContext = audioContextRef.current;
+    if (!audioContext) {
+      throw new Error('Audio context is unavailable for offline speech processing.');
+    }
+
+    const decoded = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+    const mono = new Float32Array(decoded.length);
+    const channelCount = decoded.numberOfChannels;
+
+    for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
+      const channelData = decoded.getChannelData(channelIndex);
+      for (let sampleIndex = 0; sampleIndex < decoded.length; sampleIndex += 1) {
+        mono[sampleIndex] += channelData[sampleIndex] / channelCount;
+      }
+    }
+
+    const resampled = resampleAudio(mono, decoded.sampleRate, 16000);
+    return new Blob([encodePcm16Wav(resampled, 16000)], { type: 'audio/wav' });
+  };
+
+  const pickServerSpeechMimeType = () => {
+    if (typeof MediaRecorder === 'undefined') {
+      return '';
+    }
+
+    const preferredTypes = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/mp4',
+    ];
+
+    if (typeof MediaRecorder.isTypeSupported !== 'function') {
+      return preferredTypes[0];
+    }
+
+    return preferredTypes.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || '';
+  };
+
+  const clearServerSpeechMonitor = () => {
+    if (serverSpeechMonitorRef.current !== null) {
+      window.clearInterval(serverSpeechMonitorRef.current);
+      serverSpeechMonitorRef.current = null;
+    }
+  };
+
+  const stopServerSpeechRecognition = (discardCurrentSegment = true) => {
+    clearServerSpeechMonitor();
+    serverSpeechModeRef.current = false;
+    serverSpeechSessionRef.current += 1;
+    serverSpeechSilenceStartedAtRef.current = null;
+    serverSpeechCaptureStartedAtRef.current = null;
+    serverSpeechChunksRef.current = [];
+    if (discardCurrentSegment) {
+      serverSpeechDiscardSegmentRef.current = true;
+    }
+
+    const recorder = serverSpeechRecorderRef.current;
+    serverSpeechRecorderRef.current = null;
+    if (recorder && recorder.state !== 'inactive') {
+      try { recorder.stop(); } catch {}
+    }
+  };
+
+  const fetchBackendSpeechCapabilities = async () => {
+    if (backendSpeechCapabilitiesRef.current) {
+      return backendSpeechCapabilitiesRef.current;
+    }
+
+    if (!backendSpeechCapabilitiesPromiseRef.current) {
+      backendSpeechCapabilitiesPromiseRef.current = fetch('/api/voice-capabilities')
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`Voice capability request failed (${response.status})`);
+          }
+
+          const payload = await response.json() as VoiceBackendCapabilities;
+          backendSpeechCapabilitiesRef.current = payload;
+          return payload;
+        })
+        .finally(() => {
+          backendSpeechCapabilitiesPromiseRef.current = null;
+        });
+    }
+
+    return backendSpeechCapabilitiesPromiseRef.current;
   };
 
   // ── Socket ───────────────────────────────────────────────────────────────
@@ -1074,6 +1261,7 @@ export default function App() {
     clearSwiftTimeout();
     clearListeningRestartTimer();
     suppressRecognitionResumeRef.current = true;
+    stopServerSpeechRecognition(true);
     if (browserRecognitionRef.current) {
       try { browserRecognitionRef.current.stop(); } catch {}
     }
@@ -1202,8 +1390,268 @@ export default function App() {
     }
   };
 
+  const startServerSpeechFallback = async (reason?: string) => {
+    if (reason) {
+      console.warn('[SPEECH]', reason);
+    }
+
+    if (typeof MediaRecorder === 'undefined') {
+      return startBrowserSpeechFallback('Backend speech capture is unavailable because MediaRecorder is not supported in this runtime.');
+    }
+
+    await initAudioContext();
+    const stream = microphoneStreamRef.current;
+    if (!stream) {
+      return startBrowserSpeechFallback('Backend speech capture could not initialize the microphone stream.');
+    }
+
+    stopServerSpeechRecognition(true);
+    const sessionId = serverSpeechSessionRef.current + 1;
+    serverSpeechSessionRef.current = sessionId;
+    serverSpeechModeRef.current = true;
+    serverSpeechErrorNoticeRef.current = false;
+    speechUnavailableNoticeRef.current = false;
+    micPermissionRef.current = 'granted';
+    setMicPermission('granted');
+    listeningRef.current = true;
+    setListening(true);
+    serverSpeechMimeTypeRef.current = pickServerSpeechMimeType();
+
+    const fallbackToBrowserSpeech = async (message: string) => {
+      if (sessionId !== serverSpeechSessionRef.current) {
+        return;
+      }
+      backendSpeechCapabilitiesRef.current = {
+        backendSpeechRecognition: false,
+        transcriptionModels: backendSpeechCapabilitiesRef.current?.transcriptionModels,
+      };
+      stopServerSpeechRecognition(true);
+      listeningRef.current = false;
+      setListening(false);
+      await startBrowserSpeechFallback(message);
+    };
+
+    const transcribeServerSpeechBlob = async (blob: Blob) => {
+      try {
+        const wavBlob = await convertBlobToWav(blob);
+        const audioBase64 = await blobToBase64(wavBlob);
+        const response = await fetch('/api/transcribe', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            audioBase64,
+            mimeType: 'audio/wav',
+            language: 'en-US',
+          }),
+        });
+
+        if (!response.ok) {
+          let errorMessage = `Transcription request failed (${response.status})`;
+          try {
+            const payload = await response.json() as { error?: string };
+            if (payload?.error) {
+              errorMessage = payload.error;
+            }
+          } catch {}
+
+          if (response.status === 503 || response.status === 501 || /speech model|local speech|offline|cache/i.test(errorMessage)) {
+            await fallbackToBrowserSpeech(errorMessage);
+            return;
+          }
+
+          throw new Error(errorMessage);
+        }
+
+        const payload = await response.json() as { text?: string };
+        if (sessionId !== serverSpeechSessionRef.current || !serverSpeechModeRef.current || mutedRef.current) {
+          return;
+        }
+
+        const transcript = typeof payload.text === 'string' ? payload.text.trim() : '';
+        serverSpeechErrorNoticeRef.current = false;
+        if (!transcript) {
+          return;
+        }
+        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
+          return;
+        }
+        if (Date.now() < postSpeechEchoGuardRef.current && isLikelySpeechEcho(transcript)) {
+          console.log('[SPEECH] Post-TTS echo suppressed (backend):', transcript.slice(0, 40));
+          return;
+        }
+
+        const nextDraft = draftRef.current ? `${draftRef.current} ${transcript}` : transcript;
+        setDraft(nextDraft);
+        draftRef.current = nextDraft;
+        setInterim('');
+        interimRef.current = '';
+        startSilenceTimer();
+      } catch (error: unknown) {
+        if (sessionId !== serverSpeechSessionRef.current || !serverSpeechModeRef.current) {
+          return;
+        }
+
+        if (!serverSpeechErrorNoticeRef.current) {
+          serverSpeechErrorNoticeRef.current = true;
+          addMsg('assistant', `[ERROR] ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    };
+
+    const finalizeSegment = (discard = false) => {
+      const recorder = serverSpeechRecorderRef.current;
+      if (!recorder || recorder.state !== 'recording') {
+        return;
+      }
+
+      if (discard) {
+        serverSpeechDiscardSegmentRef.current = true;
+      }
+
+      try {
+        recorder.stop();
+      } catch (error: unknown) {
+        void fallbackToBrowserSpeech(`Backend speech capture failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+
+    const startSegment = () => {
+      if (!serverSpeechModeRef.current || sessionId !== serverSpeechSessionRef.current || serverSpeechRecorderRef.current) {
+        return;
+      }
+
+      serverSpeechChunksRef.current = [];
+      serverSpeechDiscardSegmentRef.current = false;
+      serverSpeechSilenceStartedAtRef.current = null;
+      serverSpeechCaptureStartedAtRef.current = Date.now();
+
+      let recorder: MediaRecorder;
+      try {
+        recorder = serverSpeechMimeTypeRef.current
+          ? new MediaRecorder(stream, { mimeType: serverSpeechMimeTypeRef.current })
+          : new MediaRecorder(stream);
+      } catch (error: unknown) {
+        void fallbackToBrowserSpeech(`Backend speech capture failed: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+
+      recorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data && event.data.size > 0) {
+          serverSpeechChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onerror = (event: Event) => {
+        const recorderError = (event as Event & { error?: { message?: string } }).error;
+        void fallbackToBrowserSpeech(`Backend speech capture failed: ${recorderError?.message || 'recording error'}`);
+      };
+
+      recorder.onstop = () => {
+        const recordedChunks = [...serverSpeechChunksRef.current];
+        const shouldDiscard = serverSpeechDiscardSegmentRef.current;
+        const startedAt = serverSpeechCaptureStartedAtRef.current;
+        serverSpeechChunksRef.current = [];
+        serverSpeechDiscardSegmentRef.current = false;
+        serverSpeechSilenceStartedAtRef.current = null;
+        serverSpeechCaptureStartedAtRef.current = null;
+        serverSpeechRecorderRef.current = null;
+
+        if (shouldDiscard || sessionId !== serverSpeechSessionRef.current) {
+          return;
+        }
+
+        const durationMs = startedAt ? Date.now() - startedAt : 0;
+        const blob = new Blob(recordedChunks, {
+          type: recorder.mimeType || serverSpeechMimeTypeRef.current || 'audio/webm',
+        });
+        if (durationMs < SERVER_SPEECH_MIN_RECORDING_MS || blob.size < 2048) {
+          return;
+        }
+
+        void transcribeServerSpeechBlob(blob);
+      };
+
+      serverSpeechRecorderRef.current = recorder;
+      recorder.start();
+    };
+
+    clearServerSpeechMonitor();
+    serverSpeechMonitorRef.current = window.setInterval(() => {
+      if (!serverSpeechModeRef.current || sessionId !== serverSpeechSessionRef.current) {
+        return;
+      }
+
+      if (
+        mutedRef.current
+        || micPermissionRef.current === 'denied'
+        || busyRef.current
+        || speechActiveRef.current
+        || speechQueueRef.current.length > 0
+      ) {
+        finalizeSegment(true);
+        return;
+      }
+
+      const level = audioLevelRef.current;
+      const recorder = serverSpeechRecorderRef.current;
+
+      if (!recorder || recorder.state !== 'recording') {
+        if (level >= SERVER_SPEECH_START_LEVEL) {
+          startSegment();
+        }
+        return;
+      }
+
+      const captureStartedAt = serverSpeechCaptureStartedAtRef.current ?? Date.now();
+      const elapsed = Date.now() - captureStartedAt;
+      if (elapsed >= SERVER_SPEECH_MAX_RECORDING_MS) {
+        finalizeSegment(false);
+        return;
+      }
+
+      if (level >= SERVER_SPEECH_CONTINUE_LEVEL) {
+        serverSpeechSilenceStartedAtRef.current = null;
+        return;
+      }
+
+      if (serverSpeechSilenceStartedAtRef.current === null) {
+        serverSpeechSilenceStartedAtRef.current = Date.now();
+        return;
+      }
+
+      if (
+        Date.now() - serverSpeechSilenceStartedAtRef.current >= SERVER_SPEECH_SEGMENT_SILENCE_MS
+        && elapsed >= SERVER_SPEECH_MIN_RECORDING_MS
+      ) {
+        finalizeSegment(false);
+      }
+    }, 90);
+  };
+
+  const startPreferredSpeechFallback = async (reason?: string) => {
+    try {
+      const backendCapabilities = await fetchBackendSpeechCapabilities();
+      if (backendCapabilities.backendSpeechRecognition) {
+        await startServerSpeechFallback(reason);
+        return;
+      }
+    } catch (error: unknown) {
+      console.warn('[SPEECH] Failed to load backend voice capabilities:', error);
+    }
+
+    await startBrowserSpeechFallback(reason ? `${reason} Using browser fallback.` : undefined);
+  };
+
   const startListening = () => {
-    if (mutedRef.current || micPermissionRef.current === 'denied' || listeningRef.current || browserRecognitionRef.current) return;
+    if (
+      mutedRef.current
+      || micPermissionRef.current === 'denied'
+      || listeningRef.current
+      || browserRecognitionRef.current
+      || serverSpeechModeRef.current
+    ) return;
     suppressRecognitionResumeRef.current = false;
 
     const lexoire = window.lexoire;
@@ -1215,7 +1663,7 @@ export default function App() {
         const nativeSpeechSupported = capabilities?.nativeSpeechRecognition ?? (lexoire?.platform === 'darwin' && Boolean(startNativeSpeech));
 
         if (!nativeSpeechSupported || !startNativeSpeech) {
-          return startBrowserSpeechFallback(nativeSpeechSupported ? undefined : 'Native speech recognition unavailable; using browser fallback.');
+          return startPreferredSpeechFallback('Native speech recognition unavailable.');
         }
 
         return lexoire.requestMic?.()
@@ -1241,16 +1689,16 @@ export default function App() {
             clearSwiftTimeout();
             swiftStartTimeoutRef.current = window.setTimeout(() => {
               swiftStartTimeoutRef.current = null;
-              console.warn('[SPEECH] Swift LEXOIRE_READY timeout — falling back to browser speech');
+              console.warn('[SPEECH] Swift LEXOIRE_READY timeout — falling back to backend/browser speech');
               listeningRef.current = false;
               setListening(false);
-              void startBrowserSpeechFallback();
+              void startPreferredSpeechFallback();
             }, 5000);
             startNativeSpeech().catch((err: unknown) => {
               clearSwiftTimeout();
               listeningRef.current = false;
               setListening(false);
-              void startBrowserSpeechFallback(`Native speech start failed: ${err instanceof Error ? err.message : String(err)}`);
+              void startPreferredSpeechFallback(`Native speech start failed: ${err instanceof Error ? err.message : String(err)}`);
             });
           })
           .catch((err: unknown) => {
@@ -1275,7 +1723,15 @@ export default function App() {
     const actualDelay = guardRemaining > 0 ? Math.max(delay, guardRemaining + 150) : delay;
     listeningRestartTimer.current = window.setTimeout(() => {
       listeningRestartTimer.current = null;
-      if (!mutedRef.current && micPermissionRef.current !== 'denied' && !listeningRef.current && !browserRecognitionRef.current) {
+      if (
+        !mutedRef.current
+        && micPermissionRef.current !== 'denied'
+        && !busyRef.current
+        && !speechActiveRef.current
+        && speechQueueRef.current.length === 0
+        && !listeningRef.current
+        && !browserRecognitionRef.current
+      ) {
         startListening();
       }
     }, actualDelay);
@@ -1803,7 +2259,10 @@ export default function App() {
       scheduleListeningResume(1800);
     };
 
-    if (window.speechSynthesis) {
+    const speakWithBrowserSpeech = () => {
+      if (!window.speechSynthesis) {
+        return false;
+      }
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(next);
       utterance.rate = speechRateRef.current;
@@ -1826,12 +2285,28 @@ export default function App() {
       utterance.onend = finish;
       utterance.onerror = finish;
       window.speechSynthesis.speak(utterance);
-      return;
-    }
+      return true;
+    };
 
     const lexoire = window.lexoire;
     if (lexoire?.speak) {
-      Promise.resolve(lexoire.speak({ text: next, mode: voiceModeRef.current })).then(finish).catch(finish);
+      Promise.resolve(lexoire.speak({ text: next, mode: voiceModeRef.current }))
+        .then((usedNative) => {
+          if (usedNative === false && speakWithBrowserSpeech()) {
+            return;
+          }
+          finish();
+        })
+        .catch(() => {
+          if (speakWithBrowserSpeech()) {
+            return;
+          }
+          finish();
+        });
+      return;
+    }
+
+    if (speakWithBrowserSpeech()) {
       return;
     }
 

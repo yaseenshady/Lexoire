@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "nodemon --watch src --exec ts-node src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "speech:model:prepare": "node ./scripts/prepare-local-stt.mjs"
   },
   "keywords": [],
   "author": "",
@@ -13,12 +14,12 @@
   "description": "Lexoire backend",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
+    "@huggingface/transformers": "^4.2.0",
     "better-sqlite3": "^12.9.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "elevenlabs": "^1.59.0",
     "express": "^5.2.1",
-    "openai": "^6.34.0",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {

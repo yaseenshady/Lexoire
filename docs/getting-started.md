@@ -5,7 +5,8 @@
 - Node.js 22+
 - npm 10+
 - GitHub Copilot CLI installed and authenticated
-- macOS if you want the packaged desktop voice experience
+- macOS if you want the native packaged desktop speech-recognition path
+- Enough disk space for the local Whisper speech model prepared for Windows/Linux desktop voice input
 
 ## Install
 
@@ -53,3 +54,4 @@ Copy and edit:
 - If Copilot orchestration is unavailable, verify `COPILOT_COMMAND` points to a working `copilot` binary.
 - If browser voice input fails, use a Chromium-based browser and confirm microphone permissions.
 - If the desktop app lacks speech features on macOS, verify microphone and speech-recognition permissions.
+- If packaged voice input on Windows/Linux is unavailable, rebuild with `npm run speech:model:prepare` so the local speech model is present.

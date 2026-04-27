@@ -50,6 +50,7 @@ coverage/
 # Misc
 .cache/
 .temp/
+backend/models/transformers/
 .completion_report.md
 .github/JARVIS_SESSION.md
 .github/jarvis-sessions/

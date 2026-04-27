@@ -4,12 +4,13 @@
   "description": "Unified Lexoire workspace for voice-driven Copilot automation",
   "scripts": {
     "install:all": "npm --prefix frontend install && npm --prefix backend install",
+    "speech:model:prepare": "npm --prefix backend run speech:model:prepare",
     "build:swift": "node -e \"const {spawnSync}=require('child_process'); const os=require('os'); if(os.platform()!=='darwin'){console.log('Skipping Swift speech build on non-Darwin'); process.exit(0)} const result=spawnSync('swiftc',['swift/LexoireSpeech.swift','-o','swift/LexoireSpeech'],{stdio:'inherit'}); process.exit(result.status ?? 1)\"",
     "dev": "concurrently -k \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:backend": "npm --prefix backend run dev",
-    "build": "npm run build:swift && npm --prefix frontend run build && npm --prefix backend run build",
-    "backend:rebuild:electron": "electron-rebuild --version 41.3.0 --module-dir backend --force --only better-sqlite3",
+    "build": "npm run build:swift && npm run speech:model:prepare && npm --prefix frontend run build && npm --prefix backend run build",
+    "backend:rebuild:electron": "electron-rebuild --version 41.3.0 --module-dir backend --force --only better-sqlite3,onnxruntime-node",
     "start": "npm --prefix backend run start",
     "electron": "electron electron/main.js",
     "electron:dev": "npm run build && npm run electron",
@@ -44,6 +45,7 @@
       "electron/**/*",
       "swift/LexoireSpeech",
       "backend/dist/**/*",
+      "backend/models/transformers/**/*",
       "backend/package.json",
       "backend/node_modules/**/*",
       "frontend/dist/**/*",
@@ -52,11 +54,20 @@
     "asarUnpack": [
       "swift/LexoireSpeech",
       "backend/node_modules/**/*.node",
+      "backend/node_modules/**/*.dylib",
+      "backend/node_modules/onnxruntime-node/**",
+      "backend/node_modules/@img/**",
       "node_modules/**/*.node"
     ],
     "directories": {
       "buildResources": "electron/assets"
     },
+    "extraResources": [
+      {
+        "from": "backend/models/transformers",
+        "to": "models/transformers"
+      }
+    ],
     "mac": {
       "target": [
         "dmg",

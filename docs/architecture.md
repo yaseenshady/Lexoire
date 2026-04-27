@@ -21,6 +21,7 @@ The Express + Socket.IO backend handles:
 - conversation persistence
 - memory derivation
 - app-state APIs
+- backend local Whisper transcription fallback for non-macOS desktop speech input
 
 ## Electron shell
 
@@ -29,6 +30,7 @@ The Electron layer:
 - launches the backend for packaged desktop use
 - hosts the desktop window
 - bridges native speech/TTS capabilities
+- falls back to backend local-model transcription when native desktop speech recognition is unavailable
 - manages app packaging behavior
 
 ## Native speech helper

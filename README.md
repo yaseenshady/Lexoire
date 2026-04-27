@@ -4,7 +4,7 @@ Lexoire is a local-first desktop workspace for voice-driven GitHub Copilot autom
 
 - **Frontend**: React + Vite interface for voice input, queued prompts, streaming responses, and workspace context
 - **Backend**: Express + Socket.IO runtime for Copilot orchestration, persistence, and provider integrations
-- **Desktop shell**: Electron app with native speech recognition and system TTS on macOS
+- **Desktop shell**: Electron app with native macOS speech recognition, cross-platform system TTS, and a bundled free local Whisper fallback for Windows/Linux
 - **Persistence**: SQLite-backed conversations, memories, and execution-plan state
 
 ## Highlights
@@ -20,7 +20,8 @@ Lexoire is a local-first desktop workspace for voice-driven GitHub Copilot autom
 - **Node.js** 22+
 - **npm** 10+
 - A working **GitHub Copilot CLI** install (`copilot`) authenticated for local use
-- **macOS** for the full packaged desktop speech experience
+- **macOS** for the native packaged desktop speech-recognition path
+- Enough disk space for the bundled/local Whisper speech model used on Windows/Linux
 - A Chromium-based browser for the best browser speech API support in development
 
 ## Quick start
@@ -69,6 +70,9 @@ Important backend settings:
 - `DB_PATH`
 - `FRONTEND_ORIGIN`
 - `COPILOT_COMMAND`
+- `LEXOIRE_LOCAL_STT_MODEL` to override the local Whisper-compatible speech model
+
+The desktop build now prepares a **fully local** speech-recognition model during `npm run build`, and packaged Windows/Linux apps use that local model without any paid API dependency.
 
 Optional frontend setting:
 

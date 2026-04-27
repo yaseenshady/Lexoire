@@ -183,6 +183,11 @@ function getBackendRuntime() {
       : (process.env.DB_PATH || ''),
   };
 
+  if (app.isPackaged) {
+    env.LEXOIRE_LOCAL_STT_CACHE_DIR = path.join(process.resourcesPath, 'models', 'transformers');
+    env.LEXOIRE_LOCAL_STT_OFFLINE_ONLY = '1';
+  }
+
   if (process.versions?.electron) {
     return {
       command: process.execPath,
@@ -305,6 +310,94 @@ let sayProcess = null;
 const sayQueue = [];
 let activeUtterance = null;
 let stoppingSpeech = false;
+const DEFAULT_HIFI_TTS_RATE = 168;
+const DEFAULT_CLASSIC_TTS_RATE = 150;
+
+function commandExists(command) {
+  const locator = process.platform === 'win32' ? 'where' : 'which';
+  const result = spawnSync(locator, [command], {
+    stdio: 'ignore',
+    env: { ...process.env },
+  });
+  return !result.error && result.status === 0;
+}
+
+function mapWindowsSpeechRate(rate) {
+  return Math.min(10, Math.max(-10, Math.round((rate - DEFAULT_HIFI_TTS_RATE) / 8)));
+}
+
+function mapSpeechDispatcherRate(rate) {
+  return Math.min(100, Math.max(-100, Math.round((rate - DEFAULT_HIFI_TTS_RATE) * 0.8)));
+}
+
+function resolveTtsRuntime() {
+  if (process.platform === 'darwin' && commandExists('say')) {
+    return {
+      command: 'say',
+      useStdin: false,
+      buildArgs: ({ rate, voice, text }) => [
+        ...(voice ? ['-v', voice] : []),
+        '-r',
+        String(rate),
+        text,
+      ],
+    };
+  }
+
+  if (process.platform === 'win32') {
+    const shell = commandExists('powershell.exe')
+      ? 'powershell.exe'
+      : (commandExists('pwsh.exe') ? 'pwsh.exe' : null);
+    if (shell) {
+      return {
+        command: shell,
+        useStdin: true,
+        buildArgs: ({ rate }) => [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          [
+            'Add-Type -AssemblyName System.Speech;',
+            '$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;',
+            `$synth.Rate = ${mapWindowsSpeechRate(rate)};`,
+            '$text = [Console]::In.ReadToEnd();',
+            'if (-not [string]::IsNullOrWhiteSpace($text)) { $synth.Speak($text); }',
+            '$synth.Dispose();',
+          ].join(' '),
+        ],
+      };
+    }
+  }
+
+  if (process.platform === 'linux') {
+    if (commandExists('spd-say')) {
+      return {
+        command: 'spd-say',
+        useStdin: false,
+        buildArgs: ({ rate, text }) => [
+          '--wait',
+          `--rate=${mapSpeechDispatcherRate(rate)}`,
+          text,
+        ],
+      };
+    }
+
+    if (commandExists('espeak')) {
+      return {
+        command: 'espeak',
+        useStdin: false,
+        buildArgs: ({ rate, text }) => [
+          '-s',
+          String(rate),
+          text,
+        ],
+      };
+    }
+  }
+
+  return null;
+}
 
 function stopSpeechOutput() {
   while (sayQueue.length > 0) {
@@ -321,7 +414,7 @@ function getVoiceCapabilities() {
   return {
     platform: process.platform,
     nativeSpeechRecognition: process.platform === 'darwin',
-    nativeTtsFallback: process.platform === 'darwin',
+    nativeTtsFallback: Boolean(resolveTtsRuntime()),
   };
 }
 
@@ -352,16 +445,29 @@ function speakNextQueuedUtterance() {
 
   activeUtterance = next;
   stoppingSpeech = false;
+  const rate = next.mode === 'classic' ? DEFAULT_CLASSIC_TTS_RATE : DEFAULT_HIFI_TTS_RATE;
+  const runtime = resolveTtsRuntime();
   const voice = pickVoice(next.mode);
-  if (!voice) {
+  if (!runtime || (process.platform === 'darwin' && !voice)) {
     activeUtterance = null;
     next.resolve(false);
     speakNextQueuedUtterance();
     return;
   }
 
-  const rate = next.mode === 'classic' ? '150' : '168';
-  sayProcess = spawn('say', ['-v', voice, '-r', rate, next.text], { stdio: 'ignore' });
+  sayProcess = spawn(runtime.command, runtime.buildArgs({ text: next.text, rate, voice }), {
+    stdio: runtime.useStdin ? ['pipe', 'ignore', 'pipe'] : ['ignore', 'ignore', 'pipe'],
+    env: { ...process.env },
+  });
+  if (runtime.useStdin) {
+    sayProcess.stdin?.end(next.text);
+  }
+  sayProcess.stderr?.on('data', (data) => {
+    const message = data.toString().trim();
+    if (message) {
+      console.warn('[TTS]', message);
+    }
+  });
   sayProcess.once('error', (error) => {
     sayProcess = null;
     const current = activeUtterance;

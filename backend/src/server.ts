@@ -1,5 +1,5 @@
 import express from 'express';
-import { execFile, spawn, spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
@@ -13,6 +13,7 @@ import CopilotService from './copilot/copilot-service';
 import ClaudeService from './services/claude-service';
 import CodexService from './services/codex-service';
 import AcademicPptService from './services/academic-ppt-service';
+import LocalTranscriptionService from './services/local-transcription-service';
 import SessionManager from './services/session-manager';
 import SessionMessaging from './services/session-messaging';
 import logger from './services/logger';
@@ -47,6 +48,7 @@ const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY?.trim() || '';
 // Default: ElevenLabs "Adam" premade voice (deep, clear AI-assistant voice)
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID?.trim() || 'pNInz6obpgDQGcFmaJgB';
 const ELEVENLABS_MODEL = process.env.ELEVENLABS_MODEL?.trim() || 'eleven_turbo_v2_5';
+const MAX_TRANSCRIPTION_AUDIO_BYTES = 10 * 1024 * 1024;
 const elevenLabsClient = ELEVENLABS_API_KEY
   ? new ElevenLabsClient({ apiKey: ELEVENLABS_API_KEY })
   : null;
@@ -67,6 +69,18 @@ const FALLBACK_SPEECH_VOICE_BY_LOCALE: Record<string, string[]> = {
 type InstalledVoice = {
   name: string;
   locale: string;
+};
+
+type SystemSpeechRuntime = {
+  command: string;
+  useStdin: boolean;
+  buildArgs: (payload: {
+    text: string;
+    rate: number;
+    pitch: number;
+    volume: number;
+    voice?: string;
+  }) => string[];
 };
 
 const PORT = Number.parseInt(process.env.PORT || `${DEFAULT_PORT}`, 10);
@@ -103,7 +117,7 @@ app.use(cors({
     callback(new Error(`Origin ${origin || 'unknown'} is not allowed by LEXOIRE`));
   }
 }));
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
 
 const db = new DatabaseService(DB_PATH);
 const copilotService = new CopilotService();
@@ -111,8 +125,13 @@ const claudeService = new ClaudeService();
 const codexService = new CodexService();
 const sessionManager = new SessionManager(db);
 const sessionMessaging = new SessionMessaging(db);
+const localTranscriptionService = new LocalTranscriptionService();
 
 function getInstalledVoices(): InstalledVoice[] {
+  if (process.platform !== 'darwin') {
+    return [];
+  }
+
   const result = spawnSync('say', ['-v', '?'], {
     encoding: 'utf8',
     env: { ...process.env }
@@ -184,6 +203,96 @@ function resolveSpeechVoice(lang?: string, requestedVoice?: string): string | un
   return undefined;
 }
 
+function commandExists(command: string): boolean {
+  const locator = process.platform === 'win32' ? 'where' : 'which';
+  const result = spawnSync(locator, [command], {
+    stdio: 'ignore',
+    env: { ...process.env }
+  });
+  return !result.error && result.status === 0;
+}
+
+function mapWindowsSpeechRate(rate: number): number {
+  return Math.min(10, Math.max(-10, Math.round((rate - DEFAULT_SPEECH_RATE) / 8)));
+}
+
+function mapSpeechDispatcherRate(rate: number): number {
+  return Math.min(100, Math.max(-100, Math.round((rate - DEFAULT_SPEECH_RATE) * 0.8)));
+}
+
+function resolveSystemSpeechRuntime(): SystemSpeechRuntime | null {
+  if (process.platform === 'darwin' && commandExists('say')) {
+    return {
+      command: 'say',
+      useStdin: false,
+      buildArgs: ({ text, rate, voice }) => [
+        ...(voice ? ['-v', voice] : []),
+        '-r',
+        `${rate}`,
+        text
+      ]
+    };
+  }
+
+  if (process.platform === 'win32') {
+    const shell = commandExists('powershell.exe')
+      ? 'powershell.exe'
+      : (commandExists('pwsh.exe') ? 'pwsh.exe' : null);
+    if (shell) {
+      return {
+        command: shell,
+        useStdin: true,
+        buildArgs: ({ rate }) => [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          [
+            'Add-Type -AssemblyName System.Speech;',
+            '$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;',
+            `$synth.Rate = ${mapWindowsSpeechRate(rate)};`,
+            '$text = [Console]::In.ReadToEnd();',
+            'if (-not [string]::IsNullOrWhiteSpace($text)) { $synth.Speak($text); }',
+            '$synth.Dispose();'
+          ].join(' ')
+        ]
+      };
+    }
+  }
+
+  if (process.platform === 'linux') {
+    if (commandExists('spd-say')) {
+      return {
+        command: 'spd-say',
+        useStdin: false,
+        buildArgs: ({ text, rate }) => [
+          '--wait',
+          `--rate=${mapSpeechDispatcherRate(rate)}`,
+          text
+        ]
+      };
+    }
+
+    if (commandExists('espeak')) {
+      return {
+        command: 'espeak',
+        useStdin: false,
+        buildArgs: ({ text, rate, pitch, volume }) => [
+          '-s',
+          `${rate}`,
+          '-p',
+          `${Math.min(99, Math.max(0, Math.round((pitch / 200) * 99)))}`,
+          '-a',
+          `${Math.min(200, Math.max(0, Math.round((volume / 100) * 200)))}`,
+          text
+        ]
+      };
+    }
+  }
+
+  return null;
+}
+
 function normalizeSpeechText(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, ' Code omitted. ')
@@ -223,6 +332,7 @@ function clampSpeechVolume(volume?: number): number {
 
   return Math.min(100, Math.max(1, Math.round(normalizedVolume)));
 }
+
 const academicPptService = new AcademicPptService();
 
 function canListenOnPort(port: number): Promise<boolean> {
@@ -434,7 +544,7 @@ async function speakWithSystemVoice(
     return Promise.resolve();
   }
 
-  if (elevenLabsClient) {
+  if (elevenLabsClient && process.platform === 'darwin') {
     try {
       await speakWithElevenLabs(message);
       return;
@@ -443,23 +553,41 @@ async function speakWithSystemVoice(
     }
   }
 
+  const runtime = resolveSystemSpeechRuntime();
+  if (!runtime) {
+    return Promise.reject(new Error(`No supported system speech runtime is available on ${process.platform}.`));
+  }
+
   const voice = resolveSpeechVoice(lang, requestedVoice);
   const rate = clampSpeechRate(requestedRate);
-  const args = [
-    ...(voice ? ['-v', voice] : []),
-    '-r',
-    `${rate}`,
-    message
-  ];
+  const pitch = clampSpeechPitch(requestedPitch);
+  const volume = clampSpeechVolume(requestedVolume);
 
   return new Promise((resolve, reject) => {
-    execFile('say', args, (error) => {
-      if (error) {
-        reject(error);
+    const child = spawn(runtime.command, runtime.buildArgs({
+      text: message,
+      rate,
+      pitch,
+      volume,
+      voice
+    }), {
+      stdio: runtime.useStdin ? ['pipe', 'ignore', 'pipe'] : ['ignore', 'ignore', 'pipe'],
+      env: { ...process.env }
+    });
+    if (runtime.useStdin) {
+      child.stdin?.end(message);
+    }
+    let errorBuffer = '';
+    child.stderr?.on('data', (data: Buffer) => {
+      errorBuffer += data.toString();
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0 || code === null) {
+        resolve();
         return;
       }
-
-      resolve();
+      reject(new Error(errorBuffer.trim() || `Speech command exited with code ${code}`));
     });
   });
 }
@@ -471,6 +599,10 @@ app.get('/api/health', (req, res) => {
     isExecuting: copilotService.isRunning(),
     runtime: buildRuntimeSummary()
   });
+});
+
+app.get('/api/voice-capabilities', (req, res) => {
+  res.json(localTranscriptionService.getRuntimeStatus());
 });
 
 app.get('/api/app-state', (req, res) => {
@@ -579,6 +711,43 @@ app.post('/api/speak', async (req, res) => {
     const message = getErrorMessage(error);
     logger.error('Failed to speak response:', message);
     res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/transcribe', async (req, res) => {
+  const audioBase64 = typeof req.body?.audioBase64 === 'string' ? req.body.audioBase64.trim() : '';
+  const language = typeof req.body?.language === 'string' ? req.body.language.trim() : undefined;
+
+  if (!audioBase64) {
+    res.status(400).json({ error: 'audioBase64 is required' });
+    return;
+  }
+
+  let audioBuffer: Buffer;
+  try {
+    audioBuffer = Buffer.from(audioBase64, 'base64');
+  } catch {
+    res.status(400).json({ error: 'audioBase64 is not valid base64 data' });
+    return;
+  }
+
+  if (audioBuffer.length === 0) {
+    res.status(400).json({ error: 'Audio payload is empty' });
+    return;
+  }
+
+  if (audioBuffer.length > MAX_TRANSCRIPTION_AUDIO_BYTES) {
+    res.status(413).json({ error: 'Audio payload is too large for transcription' });
+    return;
+  }
+
+  try {
+    const result = await localTranscriptionService.transcribe(audioBuffer, language);
+    res.json(result);
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to transcribe speech:', message);
+    res.status(/unavailable|missing|rebuild/i.test(message) ? 503 : 500).json({ error: message });
   }
 });
 

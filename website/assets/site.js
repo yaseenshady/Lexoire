@@ -23,6 +23,30 @@ const readMotionPreference = () => {
   return Boolean(query?.matches);
 };
 
+const hasFinePointer = () => {
+  const query = window.matchMedia ? window.matchMedia("(hover: hover) and (pointer: fine)") : null;
+  return Boolean(query?.matches);
+};
+
+const hasForcedColors = () => {
+  const query = window.matchMedia ? window.matchMedia("(forced-colors: active)") : null;
+  return Boolean(query?.matches);
+};
+
+const setupEffectFallbacks = () => {
+  const root = document.documentElement;
+  const supportsBlendMode = typeof CSS === "undefined" || typeof CSS.supports !== "function"
+    ? true
+    : CSS.supports("mix-blend-mode", "screen");
+  const supportsBackdropFilter = typeof CSS === "undefined" || typeof CSS.supports !== "function"
+    ? true
+    : CSS.supports("backdrop-filter", "blur(3px)") || CSS.supports("-webkit-backdrop-filter", "blur(3px)");
+  const forcedColors = hasForcedColors();
+
+  root.classList.toggle("visual-effects-fallback", forcedColors || !supportsBlendMode);
+  root.classList.toggle("glass-effects-fallback", forcedColors || !supportsBackdropFilter);
+};
+
 const getAnimationProfile = () => {
   const width = window.innerWidth;
   const dpr = window.devicePixelRatio || 1;
@@ -74,7 +98,7 @@ const setupScrollSpy = () => {
     .map((link) => document.querySelector(link.getAttribute("href")))
     .filter(Boolean);
 
-  if (!links.length || !targets.length) return;
+  if (!links.length || !targets.length || !("IntersectionObserver" in window)) return;
 
   const activate = (id) => {
     links.forEach((link) => {
@@ -106,6 +130,13 @@ const setupReveal = () => {
   elements.forEach((element, index) => {
     element.style.setProperty("--delay", `${Math.min(index * 28, 240)}ms`);
   });
+
+  if (!("IntersectionObserver" in window)) {
+    elements.forEach((element) => {
+      element.classList.add("is-visible");
+    });
+    return;
+  }
 
   const observer = new IntersectionObserver(
     (entries) => {
@@ -292,9 +323,11 @@ const setupVisibility = () => {
 };
 
 const setupMouseGlow = () => {
-  if (state.reducedMotion) return;
-
   const root = document.documentElement;
+  root.classList.remove("has-custom-cursor");
+  if (state.reducedMotion || !hasFinePointer() || hasForcedColors()) return;
+
+  root.classList.add("has-custom-cursor");
   let frame = 0;
 
   const syncMouse = () => {
@@ -619,6 +652,7 @@ const setupFlowCanvas = () => {
 
 document.addEventListener("DOMContentLoaded", () => {
   state.reducedMotion = readMotionPreference();
+  setupEffectFallbacks();
   setCurrentYear();
   setupNav();
   setupScrollSpy();
