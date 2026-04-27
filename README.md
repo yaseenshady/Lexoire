@@ -98,7 +98,18 @@ docs/       Contributor and release documentation
 
 The public site lives in `website/` and is published with `.github/workflows/deploy-site.yml`.
 
-For public deploys, keep download links pointed at the GitHub Releases page unless the exact asset names for the current release are confirmed.
+The install buttons on the site resolve the latest matching desktop release asset from GitHub Releases at runtime and fall back to the generic releases page if no platform asset is available yet.
+
+## Desktop releases
+
+Desktop release artifacts are published with `.github/workflows/release-desktop.yml`.
+
+- Push a tag like `v1.0.0` to build and publish macOS, Windows, and Linux artifacts.
+- Or run the workflow manually to build from the current commit and create/update the matching GitHub release.
+- The release workflow publishes platform assets for the site install buttons to consume:
+  - macOS: `dmg`, `zip`
+  - Windows: `nsis`, `portable`
+  - Linux: `AppImage`, `deb`
 
 ## Open-source release notes
 

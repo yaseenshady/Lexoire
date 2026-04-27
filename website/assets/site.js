@@ -13,6 +13,9 @@ const state = {
   reducedMotion: false,
 };
 
+const RELEASES_PAGE_URL = "https://github.com/yaseensh/Lexoire/releases/latest";
+const RELEASES_API_URL = "https://api.github.com/repos/yaseensh/Lexoire/releases/latest";
+
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 const readMotionPreference = () => {
@@ -187,6 +190,96 @@ const setupArticleLaunchLinks = () => {
       }, state.reducedMotion ? 0 : 160);
     });
   });
+};
+
+const releaseAssetMatchers = {
+  mac: [
+    (name) => /\.dmg$/i.test(name) && /universal/i.test(name),
+    (name) => /\.dmg$/i.test(name) && /arm64/i.test(name),
+    (name) => /\.dmg$/i.test(name) && /x64/i.test(name),
+    (name) => /\.dmg$/i.test(name),
+    (name) => /\.zip$/i.test(name),
+  ],
+  windows: [
+    (name) => /-setup\.exe$/i.test(name),
+    (name) => /-portable\.exe$/i.test(name),
+    (name) => /\.exe$/i.test(name),
+  ],
+  linux: [
+    (name) => /\.AppImage$/i.test(name),
+    (name) => /\.deb$/i.test(name),
+  ],
+};
+
+const getReleaseAssetLabel = (assetName) => {
+  if (/\.dmg$/i.test(assetName)) return "DMG";
+  if (/\.zip$/i.test(assetName)) return "ZIP";
+  if (/-setup\.exe$/i.test(assetName)) return "SETUP EXE";
+  if (/-portable\.exe$/i.test(assetName)) return "PORTABLE EXE";
+  if (/\.AppImage$/i.test(assetName)) return "APPIMAGE";
+  if (/\.deb$/i.test(assetName)) return "DEB";
+  return "LATEST RELEASE";
+};
+
+const pickReleaseAsset = (assets, platform) => {
+  const matchers = releaseAssetMatchers[platform] || [];
+  for (const matches of matchers) {
+    const asset = assets.find((candidate) => matches(candidate?.name || ""));
+    if (asset) return asset;
+  }
+  return null;
+};
+
+const setupReleaseDownloads = async () => {
+  const buttons = Array.from(document.querySelectorAll("[data-release-platform]"));
+  if (!buttons.length) return;
+
+  const syncButton = (button, asset) => {
+    const fallbackLabel = button.getAttribute("data-release-fallback") || "LATEST RELEASE";
+    const status = button.querySelector("[data-release-status]");
+
+    if (asset?.browser_download_url) {
+      button.href = asset.browser_download_url;
+      button.title = `Download ${asset.name}`;
+      button.classList.add("is-ready");
+      button.classList.remove("is-fallback");
+      if (status) {
+        status.textContent = `${getReleaseAssetLabel(asset.name)} · latest release`;
+      }
+      return;
+    }
+
+    button.href = RELEASES_PAGE_URL;
+    button.title = "Open the latest GitHub release";
+    button.classList.add("is-fallback");
+    button.classList.remove("is-ready");
+    if (status) {
+      status.textContent = fallbackLabel;
+    }
+  };
+
+  buttons.forEach((button) => syncButton(button, null));
+
+  try {
+    const response = await fetch(RELEASES_API_URL, {
+      headers: {
+        Accept: "application/vnd.github+json",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`GitHub releases API returned ${response.status}`);
+    }
+
+    const release = await response.json();
+    const assets = Array.isArray(release?.assets) ? release.assets : [];
+
+    buttons.forEach((button) => {
+      syncButton(button, pickReleaseAsset(assets, button.getAttribute("data-release-platform")));
+    });
+  } catch (error) {
+    console.warn("Unable to resolve platform release assets.", error);
+  }
 };
 
 const setupVisibility = () => {
@@ -532,6 +625,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupReveal();
   setupCenteredArticleLinks();
   setupArticleLaunchLinks();
+  setupReleaseDownloads();
   setupVisibility();
   setupMouseGlow();
   setupScrollReaction();
