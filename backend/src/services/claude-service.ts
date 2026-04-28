@@ -20,6 +20,9 @@ const CLAUDE_CLI = resolveClaudeBinary();
 
 type Message = { role: 'user' | 'assistant'; content: string };
 type PromptResult = { text: string; aborted?: boolean };
+type PersistCliSessionId = (workspaceSessionId: string, cliSessionId: string) => void;
+type ClearCliSessionId = (workspaceSessionId: string) => void;
+
 const conversationHistory = new Map<string, Message[]>();
 const sessionIds = new Map<string, string>(); // workspaceSessionId → claude CLI session ID
 
@@ -27,6 +30,30 @@ class ClaudeService {
   private currentProcess: ChildProcess | null = null;
   private running = false;
   private abortRequested = false;
+  private persistCliSessionId?: PersistCliSessionId;
+  private clearCliSessionIdFn?: ClearCliSessionId;
+
+  /**
+   * Wire up DB persistence for CLI session IDs so --resume survives restarts.
+   * Call once after construction, before the first prompt.
+   */
+  setPersistence(persist: PersistCliSessionId, clear: ClearCliSessionId): void {
+    this.persistCliSessionId = persist;
+    this.clearCliSessionIdFn = clear;
+  }
+
+  /**
+   * Restore CLI session IDs from persisted session metadata on startup.
+   */
+  initFromSessions(sessions: Array<{ id: string; metadata?: Record<string, unknown> }>): void {
+    for (const s of sessions) {
+      const cliId = s.metadata?.claudeCliSessionId as string | undefined;
+      if (cliId) {
+        sessionIds.set(s.id, cliId);
+        console.log(`[ClaudeService] Restored CLI session for workspace ${s.id}: ${cliId}`);
+      }
+    }
+  }
 
   isRunning() { return this.running; }
 
@@ -37,6 +64,7 @@ class ClaudeService {
   clearHistory(sessionId: string) {
     conversationHistory.delete(sessionId);
     sessionIds.delete(sessionId);
+    this.clearCliSessionIdFn?.(sessionId);
   }
 
   abort() {
@@ -198,6 +226,7 @@ class ClaudeService {
 
         if (newSessionId) {
           sessionIds.set(sessionId, newSessionId);
+          this.persistCliSessionId?.(sessionId, newSessionId);
         }
         resolve({ text: full.trim() });
       });

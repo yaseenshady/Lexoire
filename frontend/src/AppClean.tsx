@@ -315,12 +315,19 @@ function getPreferredBrowserVoiceNames(mode: VoiceMode, platform?: string) {
   if (platform === 'darwin') {
     return mode === 'classic'
       ? ['Fred', 'Ralph', 'Albert', 'Samantha']
-      : ['Eddy', 'Reed', 'Flo', 'Samantha', 'Ava', 'Allison'];
+      : ['Samantha', 'Ava', 'Allison', 'Eddy', 'Reed', 'Flo'];
   }
 
+  if (platform === 'win32') {
+    return mode === 'classic'
+      ? ['Microsoft David', 'Microsoft Mark', 'Fred', 'Ralph']
+      : ['Microsoft Aria', 'Microsoft Jenny', 'Microsoft Zira', 'Google US English', 'Google UK English Female'];
+  }
+
+  // Linux + unknown
   return mode === 'classic'
     ? ['Fred', 'Ralph', 'Albert', 'Microsoft David', 'Microsoft Mark']
-    : ['Microsoft Aria', 'Microsoft Jenny', 'Google US English', 'Google UK English Female', 'Samantha', 'Eddy', 'Reed', 'Flo', 'Ava', 'Allison'];
+    : ['Google US English', 'Google UK English Female', 'Microsoft Aria', 'Microsoft Jenny', 'Samantha', 'Eddy', 'Reed', 'Flo'];
 }
 
 export default function App() {
@@ -366,8 +373,8 @@ export default function App() {
   const [selectedVoiceName, setSelectedVoiceName] = useState('');
   const selectedVoiceIdRef = useRef('');
   const selectedVoiceNameRef = useRef('');
-  const [speechRate, setSpeechRate] = useState(0.92);
-  const speechRateRef = useRef(0.92);
+  const [speechRate, setSpeechRate] = useState(1.1);
+  const speechRateRef = useRef(1.1);
   const [speechVolume, setSpeechVolume] = useState(1.0);
   const speechVolumeRef = useRef(1.0);
 
@@ -2934,7 +2941,7 @@ export default function App() {
             const next = voiceModeRef.current === 'hifi' ? 'classic' : 'hifi';
             voiceModeRef.current = next;
             setVoiceMode(next);
-            const defaultRate = next === 'classic' ? 0.78 : 0.92;
+            const defaultRate = next === 'classic' ? 0.88 : 1.1;
             speechRateRef.current = defaultRate;
             setSpeechRate(defaultRate);
             window.speechSynthesis?.cancel?.();
@@ -2999,7 +3006,7 @@ export default function App() {
                   {(['hifi', 'classic'] as VoiceMode[]).map(m => (
                     <button key={m} onClick={() => {
                       voiceModeRef.current = m; setVoiceMode(m);
-                      const r = m === 'classic' ? 0.78 : 0.92;
+                      const r = m === 'classic' ? 0.88 : 1.1;
                       speechRateRef.current = r; setSpeechRate(r);
                     }} style={{
                       flex: 1,

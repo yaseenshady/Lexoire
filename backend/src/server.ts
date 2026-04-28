@@ -58,13 +58,13 @@ const STARTED_AT = Date.now();
 const DEFAULT_PORT = 5000;
 const DEFAULT_FRONTEND_ORIGIN = 'http://localhost:3000';
 const FRONTEND_DIST_PATH = path.resolve(__dirname, '../../frontend/dist');
-const DEFAULT_SPEECH_RATE = 185;
+const DEFAULT_SPEECH_RATE = 210;
 const DEFAULT_SPEECH_PITCH = 100;
 const DEFAULT_SPEECH_VOLUME = 100;
 const FALLBACK_SPEECH_VOICE_BY_LOCALE: Record<string, string[]> = {
-  'en-us': ['Flo (English (US))', 'Eddy (English (US))', 'Samantha', 'Allison', 'Ava', 'Alex'],
+  'en-us': ['Samantha', 'Flo (English (US))', 'Eddy (English (US))', 'Allison', 'Ava', 'Alex'],
   'en-gb': ['Flo (English (UK))', 'Eddy (English (UK))', 'Daniel', 'Serena'],
-  en: ['Flo (English (US))', 'Eddy (English (US))', 'Samantha', 'Allison', 'Ava', 'Alex', 'Daniel', 'Serena']
+  en: ['Samantha', 'Flo (English (US))', 'Eddy (English (US))', 'Allison', 'Ava', 'Alex', 'Daniel', 'Serena']
 };
 
 type InstalledVoice = {
@@ -126,6 +126,26 @@ const claudeService = new ClaudeService();
 const codexService = new CodexService();
 const sessionManager = new SessionManager(db);
 const sessionMessaging = new SessionMessaging(db);
+
+// Restore Claude CLI session IDs from DB so --resume survives server restarts
+claudeService.initFromSessions(sessionManager.listSessions());
+claudeService.setPersistence(
+  (workspaceId, cliId) => {
+    const session = sessionManager.getSession(workspaceId);
+    if (session) {
+      session.metadata = { ...session.metadata, claudeCliSessionId: cliId };
+      db.saveSession(session);
+    }
+  },
+  (workspaceId) => {
+    const session = sessionManager.getSession(workspaceId);
+    if (session) {
+      const { claudeCliSessionId: _, ...rest } = session.metadata ?? {};
+      session.metadata = rest;
+      db.saveSession(session);
+    }
+  }
+);
 const localTranscriptionService = new LocalTranscriptionService();
 
 function getInstalledVoices(): InstalledVoice[] {
@@ -252,6 +272,10 @@ function resolveSystemSpeechRuntime(): SystemSpeechRuntime | null {
             'Add-Type -AssemblyName System.Speech;',
             '$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;',
             `$synth.Rate = ${mapWindowsSpeechRate(rate)};`,
+            // Pick best available English voice (Zira > Hazel > David > first English)
+            '$voices = $synth.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture -match "^en" };',
+            '$preferred = ($voices | Where-Object { $_.VoiceInfo.Name -match "Zira|Jenny|Aria|Hazel" } | Select-Object -First 1) ?? ($voices | Select-Object -First 1);',
+            'if ($preferred) { $synth.SelectVoice($preferred.VoiceInfo.Name); }',
             '$text = [Console]::In.ReadToEnd();',
             'if (-not [string]::IsNullOrWhiteSpace($text)) { $synth.Speak($text); }',
             '$synth.Dispose();'
@@ -268,8 +292,23 @@ function resolveSystemSpeechRuntime(): SystemSpeechRuntime | null {
         useStdin: false,
         buildArgs: ({ text, rate }) => [
           '--wait',
+          '--voice-type=FEMALE1',
           `--rate=${mapSpeechDispatcherRate(rate)}`,
           text
+        ]
+      };
+    }
+
+    if (commandExists('espeak-ng')) {
+      return {
+        command: 'espeak-ng',
+        useStdin: true,
+        buildArgs: ({ rate, pitch, volume }) => [
+          '-v', 'en-us',
+          '-s', `${Math.round(rate * 0.85)}`,
+          '-p', `${Math.min(99, Math.max(0, Math.round((pitch / 200) * 99)))}`,
+          '-a', `${Math.min(200, Math.max(0, Math.round((volume / 100) * 200)))}`,
+          '--stdin',
         ]
       };
     }
@@ -279,12 +318,10 @@ function resolveSystemSpeechRuntime(): SystemSpeechRuntime | null {
         command: 'espeak',
         useStdin: false,
         buildArgs: ({ text, rate, pitch, volume }) => [
-          '-s',
-          `${rate}`,
-          '-p',
-          `${Math.min(99, Math.max(0, Math.round((pitch / 200) * 99)))}`,
-          '-a',
-          `${Math.min(200, Math.max(0, Math.round((volume / 100) * 200)))}`,
+          '-v', 'en',
+          '-s', `${rate}`,
+          '-p', `${Math.min(99, Math.max(0, Math.round((pitch / 200) * 99)))}`,
+          '-a', `${Math.min(200, Math.max(0, Math.round((volume / 100) * 200)))}`,
           text
         ]
       };

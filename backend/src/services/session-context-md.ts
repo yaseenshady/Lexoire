@@ -83,17 +83,23 @@ export function ensureSessionContext(session: Session): string {
 
 export function buildProviderPrompt(session: Session, provider: ProviderName, prompt: string): string {
   const contextPath = ensureSessionContext(session);
+  const contextContent = readFileSync(contextPath, 'utf8');
   return [
     `LEXOIRE workspace session id: ${session.id}`,
     `Active provider: ${provider}`,
     `Repository path: ${session.repoPath}`,
-    `Central context markdown: ${contextPath}`,
+    `Central context markdown path: ${contextPath}`,
     '',
-    'Before making changes, read the central context markdown.',
-    'As you work, keep that markdown updated with: current objective, plan, progress log, files touched, decisions, blockers, and next steps.',
-    'If you switch providers later, that markdown must contain enough context for the next provider to continue without asking what happened.',
+    '## Current Session Context',
+    contextContent.trim(),
     '',
-    'User request:',
+    '---',
+    'Instructions:',
+    '- This context is shared across all providers (Claude, Copilot, Codex). Pick up exactly where the last provider left off.',
+    '- After completing work, update the markdown file at the path above: keep Objective, Plan, Progress Log, files touched, decisions, blockers, and next steps current.',
+    '- Write enough in Handoff Context that the next provider can resume with zero ambiguity.',
+    '',
+    '## User Request',
     prompt,
   ].join('\n');
 }
