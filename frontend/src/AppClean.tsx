@@ -3338,6 +3338,7 @@ export default function App() {
             flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 16px',
             display: 'flex', flexDirection: 'column', gap: 12,
             scrollbarWidth: 'thin',
+            userSelect: 'text',
           }}>
             {msgs.filter(m => m.text.trim() || (busy && m.role === 'assistant')).map(m => {
               const ac = m.agent ? AGENT_COLORS[m.agent] : AGENT_COLORS.copilot;
@@ -3727,7 +3728,8 @@ export default function App() {
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #00ff2220; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb { background: #00ff2240; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: #00ff2280; }
       `}</style>
     </div>
   );
