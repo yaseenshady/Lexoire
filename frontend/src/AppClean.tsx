@@ -287,6 +287,7 @@ export default function App() {
   const speechStreamBufferRef = useRef('');
   const hasSpeechStreamedRef = useRef(false);
   const speechActiveRef = useRef(false);
+  const speechPlaybackGenerationRef = useRef(0);
   const suppressCurrentResponseSpeechRef = useRef(false);
   const currentSpokenTextRef = useRef('');
   const recentSpokenTextRef = useRef<string[]>([]);
@@ -1240,6 +1241,7 @@ export default function App() {
   };
 
   const interruptSpeechPlayback = (suppressCurrentResponseVoice = false) => {
+    speechPlaybackGenerationRef.current += 1;
     if (suppressCurrentResponseVoice) {
       suppressCurrentResponseSpeechRef.current = true;
     }
@@ -1254,7 +1256,8 @@ export default function App() {
     // Clear echo guard so mic restarts promptly after user barge-in
     postSpeechEchoGuardRef.current = 0;
     window.speechSynthesis?.cancel?.();
-    window.lexoire?.stopSpeech?.();
+    void window.lexoire?.stopSpeech?.();
+    window.setTimeout(() => window.speechSynthesis?.cancel?.(), 50);
   };
 
   const markActiveResponseStopped = (messageId: number | null, provider: Agent | null) => {
@@ -1834,6 +1837,16 @@ export default function App() {
         const macNativeOnly = lexoire?.platform === 'darwin';
         const nativeSpeechSupported = capabilities?.nativeSpeechRecognition ?? (lexoire?.platform === 'darwin' && Boolean(startNativeSpeech));
 
+        if (macNativeOnly && (!nativeSpeechSupported || !startNativeSpeech)) {
+          listeningRef.current = false;
+          setListening(false);
+          if (!speechUnavailableNoticeRef.current) {
+            speechUnavailableNoticeRef.current = true;
+            addMsg('assistant', '[ERROR] Native macOS speech recognition is unavailable in this build.');
+          }
+          return;
+        }
+
         if (!nativeSpeechSupported || !startNativeSpeech) {
           return startPreferredSpeechFallback('Native speech recognition unavailable.');
         }
@@ -1880,12 +1893,19 @@ export default function App() {
               console.warn('[SPEECH] Swift LEXOIRE_READY timeout');
               listeningRef.current = false;
               setListening(false);
-              void startPreferredSpeechFallback('Native macOS speech recognition did not become ready.');
+              if (!speechUnavailableNoticeRef.current) {
+                speechUnavailableNoticeRef.current = true;
+                addMsg('assistant', '[ERROR] Native macOS speech recognition did not become ready.');
+              }
             }, macNativeOnly ? 20000 : 5000);
             startNativeSpeech().catch((err: unknown) => {
               clearSwiftTimeout();
               listeningRef.current = false;
               setListening(false);
+              if (macNativeOnly) {
+                addMsg('assistant', `[ERROR] Native macOS speech recognition failed to start: ${err instanceof Error ? err.message : String(err)}`);
+                return;
+              }
               void startPreferredSpeechFallback(`Native speech start failed: ${err instanceof Error ? err.message : String(err)}`);
             });
           })
@@ -2487,12 +2507,16 @@ export default function App() {
 
     speechActiveRef.current = true;
     setIsSpeaking(true);
+    const playbackGeneration = speechPlaybackGenerationRef.current;
     rememberSpokenText(next);
     setInterim('');
     interimRef.current = '';
     stopListening();
 
     const finish = () => {
+      if (playbackGeneration !== speechPlaybackGenerationRef.current) {
+        return;
+      }
       // Short echo guard — macOS onend fires slightly early but 800ms is enough
       postSpeechEchoGuardRef.current = Date.now() + 800;
 
@@ -2560,12 +2584,18 @@ export default function App() {
     if (lexoire?.speak) {
       Promise.resolve(lexoire.speak({ text: next, mode: voiceModeRef.current, voiceName: selectedVoiceName || undefined }))
         .then((usedNative) => {
+          if (playbackGeneration !== speechPlaybackGenerationRef.current) {
+            return;
+          }
           if (usedNative === false && speakWithBrowserSpeech()) {
             return;
           }
           finish();
         })
         .catch(() => {
+          if (playbackGeneration !== speechPlaybackGenerationRef.current) {
+            return;
+          }
           if (speakWithBrowserSpeech()) {
             return;
           }

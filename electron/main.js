@@ -475,6 +475,12 @@ function stopSpeechOutput() {
   if (sayProcess) {
     stoppingSpeech = true;
     try { sayProcess.kill('SIGTERM'); } catch (_) {}
+    const processToStop = sayProcess;
+    setTimeout(() => {
+      if (sayProcess === processToStop) {
+        try { processToStop.kill('SIGKILL'); } catch (_) {}
+      }
+    }, 180);
   }
 }
 
