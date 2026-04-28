@@ -378,8 +378,8 @@ let sayProcess = null;
 const sayQueue = [];
 let activeUtterance = null;
 let stoppingSpeech = false;
-const DEFAULT_HIFI_TTS_RATE = 168;
-const DEFAULT_CLASSIC_TTS_RATE = 150;
+const DEFAULT_HIFI_TTS_RATE = 210;
+const DEFAULT_CLASSIC_TTS_RATE = 175;
 
 function commandExists(command) {
   const locator = process.platform === 'win32' ? 'where.exe' : 'which';
@@ -489,13 +489,26 @@ function resolveTtsRuntime() {
       };
     }
 
+    if (commandExists('espeak-ng')) {
+      return {
+        command: 'espeak-ng',
+        useStdin: true,
+        buildArgs: ({ rate }) => [
+          '-v', 'en-us',
+          '-s', String(Math.round(rate * 0.85)), // espeak-ng WPM scale is ~15% lower
+          '-p', '45',   // slightly lower pitch (100 = default, lower = deeper)
+          '--stdin',
+        ],
+      };
+    }
+
     if (commandExists('espeak')) {
       return {
         command: 'espeak',
         useStdin: false,
         buildArgs: ({ rate, text }) => [
-          '-s',
-          String(rate),
+          '-v', 'en',
+          '-s', String(rate),
           text,
         ],
       };
@@ -571,7 +584,7 @@ function pickVoice(mode = 'hifi', preferredVoiceName) {
     ? [envVoice]
     : mode === 'classic'
       ? ['Fred', 'Ralph', 'Albert']
-      : ['Eddy (English (US))', 'Reed (English (US))', 'Flo (English (US))', 'Samantha', 'Ava', 'Allison'];
+      : ['Samantha', 'Eddy (English (US))', 'Reed (English (US))', 'Flo (English (US))', 'Ava', 'Allison'];
 
   const installed = listDarwinVoices();
   if (explicitVoice) {

@@ -329,7 +329,10 @@ const setupVisibility = () => {
 const setupMouseGlow = () => {
   const root = document.documentElement;
   root.classList.remove("has-custom-cursor");
-  if (state.reducedMotion || !hasFinePointer() || hasForcedColors()) return;
+  // Skip custom cursor on Windows — cursor glow/reticle need mix-blend-mode: screen
+  // which doesn't render correctly on Windows, so we hide those elements and
+  // must also avoid setting cursor: none (which would leave users with no cursor).
+  if (state.reducedMotion || !hasFinePointer() || hasForcedColors() || isWindows()) return;
 
   root.classList.add("has-custom-cursor");
   let frame = 0;

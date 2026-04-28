@@ -138,17 +138,125 @@ function CountdownRing({ pct }: { pct: number }) {
   );
 }
 
-function renderMessageText(text: string) {
+function renderInline(text: string, keyPrefix: string) {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-  return parts.map((part, index) => {
+  return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={index} style={{ fontWeight: 800 }}>{part.slice(2, -2)}</strong>;
+      return <strong key={`${keyPrefix}-b${i}`} style={{ fontWeight: 800 }}>{part.slice(2, -2)}</strong>;
     }
     if (part.startsWith('`') && part.endsWith('`')) {
-      return <code key={index} style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 4, padding: '1px 4px' }}>{part.slice(1, -1)}</code>;
+      return <code key={`${keyPrefix}-c${i}`} style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 4, padding: '1px 4px' }}>{part.slice(1, -1)}</code>;
     }
     return part;
   });
+}
+
+function renderMessageText(text: string) {
+  const lines = text.split('\n');
+  const elements: React.ReactNode[] = [];
+  let pendingText: string[] = [];
+  let inCodeBlock = false;
+  let codeLines: string[] = [];
+  let codeLang = '';
+
+  const flushText = () => {
+    if (!pendingText.length) return;
+    elements.push(
+      <span key={`t${elements.length}`} style={{ whiteSpace: 'pre-wrap' }}>
+        {pendingText.join('\n')}
+      </span>
+    );
+    pendingText = [];
+  };
+
+  const flushCode = () => {
+    if (!codeLines.length && !codeLang) return;
+    const key = `cb${elements.length}`;
+    elements.push(
+      <div key={key} style={{ marginTop: 8, marginBottom: 8 }}>
+        {codeLang && (
+          <div style={{ fontSize: '0.72em', letterSpacing: '0.1em', opacity: 0.5, textTransform: 'uppercase', marginBottom: 2 }}>
+            {codeLang}
+          </div>
+        )}
+        <pre style={{
+          margin: 0,
+          padding: '10px 12px',
+          background: 'rgba(0,0,0,0.45)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          borderLeft: '2px solid rgba(255,255,255,0.25)',
+          borderRadius: 6,
+          fontSize: '0.9em',
+          lineHeight: 1.55,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all',
+          overflowX: 'auto',
+          fontFamily: 'inherit',
+        }}>
+          {codeLines.join('\n')}
+        </pre>
+      </div>
+    );
+    codeLines = [];
+    codeLang = '';
+  };
+
+  lines.forEach((line, i) => {
+    if (line.startsWith('```')) {
+      if (inCodeBlock) {
+        flushCode();
+        inCodeBlock = false;
+      } else {
+        flushText();
+        inCodeBlock = true;
+        codeLang = line.slice(3).trim();
+      }
+      return;
+    }
+
+    if (inCodeBlock) {
+      codeLines.push(line);
+      return;
+    }
+
+    const h3 = line.match(/^###\s+(.*)/);
+    const h2 = line.match(/^##\s+(.*)/);
+    const h1 = line.match(/^#\s+(.*)/);
+    const bullet = line.match(/^[-*]\s+(.*)/);
+    const numbered = line.match(/^(\d+)\.\s+(.*)/);
+
+    if (h3 || h2 || h1 || bullet || numbered) {
+      flushText();
+      if (h3) {
+        elements.push(<div key={i} style={{ fontWeight: 800, fontSize: '0.95em', marginTop: elements.length ? 10 : 0, marginBottom: 2 }}>{renderInline(h3[1], `${i}`)}</div>);
+      } else if (h2) {
+        elements.push(<div key={i} style={{ fontWeight: 800, fontSize: '1.05em', marginTop: elements.length ? 12 : 0, marginBottom: 2 }}>{renderInline(h2[1], `${i}`)}</div>);
+      } else if (h1) {
+        elements.push(<div key={i} style={{ fontWeight: 800, fontSize: '1.15em', marginTop: elements.length ? 14 : 0, marginBottom: 4 }}>{renderInline(h1[1], `${i}`)}</div>);
+      } else if (bullet) {
+        elements.push(
+          <div key={i} style={{ display: 'flex', gap: 7, marginTop: 3 }}>
+            <span style={{ marginTop: '0.45em', width: 5, height: 5, minWidth: 5, minHeight: 5, borderRadius: '50%', background: 'currentColor', opacity: 0.6, display: 'inline-block' }} />
+            <span>{renderInline(bullet[1], `${i}`)}</span>
+          </div>
+        );
+      } else if (numbered) {
+        elements.push(
+          <div key={i} style={{ display: 'flex', gap: 7, marginTop: 3 }}>
+            <span style={{ opacity: 0.6, minWidth: '1.4em', textAlign: 'right' }}>{numbered[1]}.</span>
+            <span>{renderInline(numbered[2], `${i}`)}</span>
+          </div>
+        );
+      }
+    } else {
+      pendingText.push(line);
+    }
+  });
+
+  // Flush anything remaining (handles unclosed code blocks gracefully)
+  if (inCodeBlock) flushCode();
+  flushText();
+  return elements;
 }
 
 function stripSpeechMarkup(text: string) {
@@ -207,12 +315,19 @@ function getPreferredBrowserVoiceNames(mode: VoiceMode, platform?: string) {
   if (platform === 'darwin') {
     return mode === 'classic'
       ? ['Fred', 'Ralph', 'Albert', 'Samantha']
-      : ['Eddy', 'Reed', 'Flo', 'Samantha', 'Ava', 'Allison'];
+      : ['Samantha', 'Ava', 'Allison', 'Eddy', 'Reed', 'Flo'];
   }
 
+  if (platform === 'win32') {
+    return mode === 'classic'
+      ? ['Microsoft David', 'Microsoft Mark', 'Fred', 'Ralph']
+      : ['Microsoft Aria', 'Microsoft Jenny', 'Microsoft Zira', 'Google US English', 'Google UK English Female'];
+  }
+
+  // Linux + unknown
   return mode === 'classic'
     ? ['Fred', 'Ralph', 'Albert', 'Microsoft David', 'Microsoft Mark']
-    : ['Microsoft Aria', 'Microsoft Jenny', 'Google US English', 'Google UK English Female', 'Samantha', 'Eddy', 'Reed', 'Flo', 'Ava', 'Allison'];
+    : ['Google US English', 'Google UK English Female', 'Microsoft Aria', 'Microsoft Jenny', 'Samantha', 'Eddy', 'Reed', 'Flo'];
 }
 
 export default function App() {
@@ -258,8 +373,10 @@ export default function App() {
   const [selectedVoiceName, setSelectedVoiceName] = useState('');
   const selectedVoiceIdRef = useRef('');
   const selectedVoiceNameRef = useRef('');
-  const [speechRate, setSpeechRate] = useState(0.92);
-  const speechRateRef = useRef(0.92);
+  const [speechRate, setSpeechRate] = useState(1.1);
+  const speechRateRef = useRef(1.1);
+  const [speechVolume, setSpeechVolume] = useState(1.0);
+  const speechVolumeRef = useRef(1.0);
 
   const socketRef = useRef<any>(null);
   const busyRef = useRef(false);
@@ -483,6 +600,7 @@ export default function App() {
   useEffect(() => { selectedVoiceIdRef.current = selectedVoiceId; }, [selectedVoiceId]);
   useEffect(() => { selectedVoiceNameRef.current = selectedVoiceName; }, [selectedVoiceName]);
   useEffect(() => { speechRateRef.current = speechRate; }, [speechRate]);
+  useEffect(() => { speechVolumeRef.current = speechVolume; }, [speechVolume]);
 
   const setActiveStreamingMessage = (id: number | null) => {
     activeStreamMsgIdRef.current = id;
@@ -1062,7 +1180,8 @@ export default function App() {
       } else if (ev.type === 'interim' && ev.text) {
         const txt = ev.text.trim();
         if (!txt) return;
-        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
+        if (speechActiveRef.current) {
+          // Audio is actively playing — skip interim to avoid echo
           return;
         }
         // Post-TTS echo guard: suppress interim echo from the app's own voice
@@ -1080,8 +1199,13 @@ export default function App() {
           console.log('[SPEECH] Final text empty, still triggering timer');
           return;
         }
-        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
+        if (speechActiveRef.current) {
+          // Audio is actively playing — discard to avoid echo
           return;
+        }
+        // If speech is queued but not yet playing, interrupt it so user can speak
+        if (speechQueueRef.current.length > 0) {
+          interruptSpeechPlayback(false);
         }
         // Post-TTS echo guard: discard if the mic picked up the app's own voice after it finished speaking
         if (Date.now() < postSpeechEchoGuardRef.current && isLikelySpeechEcho(txt)) {
@@ -1478,9 +1602,14 @@ export default function App() {
       const trimmedInterim = interimText.trim();
 
       if (trimmedFinal) {
-        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
+        if (speechActiveRef.current) {
+          // Audio is actively playing — discard to avoid echo
           browserSpeechFinalRef.current = '';
           return;
+        }
+        // If speech is queued but not yet playing, interrupt it so the user can speak
+        if (speechQueueRef.current.length > 0) {
+          interruptSpeechPlayback(false);
         }
         // Post-TTS echo guard: discard transcript if it looks like the mic picked up the app's own voice
         if (Date.now() < postSpeechEchoGuardRef.current && isLikelySpeechEcho(trimmedFinal)) {
@@ -1494,7 +1623,8 @@ export default function App() {
         setInterim('');
         interimRef.current = '';
       } else if (trimmedInterim) {
-        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
+        if (speechActiveRef.current) {
+          // Audio is actively playing — discard interim to avoid echo
           return;
         }
         // Post-TTS echo guard: suppress interim echo
@@ -1648,8 +1778,13 @@ export default function App() {
         if (!transcript) {
           return;
         }
-        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
+        if (speechActiveRef.current) {
+          // Audio is actively playing — discard transcript to avoid echo
           return;
+        }
+        // If speech is queued but not yet playing, interrupt so user can speak
+        if (speechQueueRef.current.length > 0) {
+          interruptSpeechPlayback(false);
         }
         if (Date.now() < postSpeechEchoGuardRef.current && isLikelySpeechEcho(transcript)) {
           console.log('[SPEECH] Post-TTS echo suppressed (backend):', transcript.slice(0, 40));
@@ -1761,8 +1896,9 @@ export default function App() {
         mutedRef.current
         || micPermissionRef.current === 'denied'
         || speechActiveRef.current
-        || speechQueueRef.current.length > 0
       ) {
+        // Discard recording only when audio is actively playing — queued-but-not-playing
+        // speech is not the same as speaking; allow mic to capture during that window.
         finalizeSegment(true);
         return;
       }
@@ -1947,7 +2083,6 @@ export default function App() {
         !mutedRef.current
         && micPermissionRef.current !== 'denied'
         && !speechActiveRef.current
-        && speechQueueRef.current.length === 0
         && !listeningRef.current
         && !browserRecognitionRef.current
       ) {
@@ -2551,7 +2686,7 @@ export default function App() {
       const utterance = new SpeechSynthesisUtterance(next);
       utterance.rate = speechRateRef.current;
       utterance.pitch = voiceModeRef.current === 'classic' ? 0.72 : 0.98;
-      utterance.volume = 1;
+      utterance.volume = speechVolumeRef.current;
 
       const cachedAutoVoice = !selectedVoice
         ? matchBrowserVoice(voices, autoSelectedBrowserVoiceNameRef.current[mode])
@@ -2806,7 +2941,7 @@ export default function App() {
             const next = voiceModeRef.current === 'hifi' ? 'classic' : 'hifi';
             voiceModeRef.current = next;
             setVoiceMode(next);
-            const defaultRate = next === 'classic' ? 0.78 : 0.92;
+            const defaultRate = next === 'classic' ? 0.88 : 1.1;
             speechRateRef.current = defaultRate;
             setSpeechRate(defaultRate);
             window.speechSynthesis?.cancel?.();
@@ -2871,7 +3006,7 @@ export default function App() {
                   {(['hifi', 'classic'] as VoiceMode[]).map(m => (
                     <button key={m} onClick={() => {
                       voiceModeRef.current = m; setVoiceMode(m);
-                      const r = m === 'classic' ? 0.78 : 0.92;
+                      const r = m === 'classic' ? 0.88 : 1.1;
                       speechRateRef.current = r; setSpeechRate(r);
                     }} style={{
                       flex: 1,
@@ -2930,6 +3065,23 @@ export default function App() {
                 />
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: '#ffffff25', marginTop: 2 }}>
                   <span>0.4x slow</span><span>1.0x normal</span><span>1.6x fast</span>
+                </div>
+              </div>
+
+              {/* Volume control */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <div style={{ fontSize: 9, letterSpacing: 1.5, color: '#ffffff40', textTransform: 'uppercase' }}>Volume</div>
+                  <div style={{ fontSize: 9, color: '#ffd060' }}>{Math.round(speechVolume * 100)}%</div>
+                </div>
+                <input
+                  type="range" min="0" max="1" step="0.05"
+                  value={speechVolume}
+                  onChange={e => { const v = parseFloat(e.target.value); setSpeechVolume(v); speechVolumeRef.current = v; }}
+                  style={{ width: '100%', accentColor: '#ffcc32', cursor: 'pointer' }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: '#ffffff25', marginTop: 2 }}>
+                  <span>0% mute</span><span>50%</span><span>100% full</span>
                 </div>
               </div>
 
@@ -3193,6 +3345,7 @@ export default function App() {
             flex: 1, minHeight: 0, overflow: 'auto', padding: '20px 16px',
             display: 'flex', flexDirection: 'column', gap: 12,
             scrollbarWidth: 'thin',
+            userSelect: 'text',
           }}>
             {msgs.filter(m => m.text.trim() || (busy && m.role === 'assistant')).map(m => {
               const ac = m.agent ? AGENT_COLORS[m.agent] : AGENT_COLORS.copilot;
@@ -3582,7 +3735,8 @@ export default function App() {
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #00ff2220; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb { background: #00ff2240; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: #00ff2280; }
       `}</style>
     </div>
   );
