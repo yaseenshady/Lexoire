@@ -10,6 +10,7 @@ interface Window {
     requestMic?: () => Promise<boolean>;
     getMicStatus?: () => Promise<'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown'>;
     openMicSettings?: () => Promise<boolean>;
+    openWindow?: () => Promise<boolean>;
     startSpeech?: () => Promise<void>;
     stopSpeechRecognition?: () => Promise<void>;
     getVoiceCapabilities?: () => Promise<{

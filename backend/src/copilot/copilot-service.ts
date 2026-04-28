@@ -57,6 +57,9 @@ function saveSessionId(sessionId: string, prompt?: string) {
   ].join('\n'));
 }
 
+type PersistCliSessionId = (workspaceSessionId: string, cliSessionId: string) => void;
+type ClearCliSessionId = (workspaceSessionId: string) => void;
+
 export interface CopilotRuntimeStatus {
   command: string;
   available: boolean;
@@ -69,6 +72,8 @@ class CopilotService {
   private masterSessionId: string | undefined;
   private sessionIdsByWorkspaceSession = new Map<string, string>();
   private abortRequested = false;
+  private persistCliSessionId?: PersistCliSessionId;
+  private clearCliSessionIdFn?: ClearCliSessionId;
 
   constructor(private readonly commandBinary: string = resolveCopilotBinary()) {
     this.masterSessionId = loadSessionId();
@@ -81,6 +86,21 @@ class CopilotService {
 
   getCommandBinary(): string { return this.commandBinary; }
   getMasterSessionId(): string | undefined { return this.masterSessionId; }
+
+  setPersistence(persist: PersistCliSessionId, clear: ClearCliSessionId): void {
+    this.persistCliSessionId = persist;
+    this.clearCliSessionIdFn = clear;
+  }
+
+  initFromSessions(sessions: Array<{ id: string; metadata?: Record<string, unknown> }>): void {
+    for (const s of sessions) {
+      const cliId = s.metadata?.copilotCliSessionId as string | undefined;
+      if (cliId) {
+        this.sessionIdsByWorkspaceSession.set(s.id, cliId);
+        console.log(`[CopilotService] Restored CLI session for workspace ${s.id}: ${cliId}`);
+      }
+    }
+  }
 
   getRuntimeStatus(): CopilotRuntimeStatus {
     const result = spawnSync(this.commandBinary, ['--version'], {
@@ -205,19 +225,18 @@ class CopilotService {
         }
 
         if (code !== 0 || (errorOutput && !output.trim())) {
-          // Failed — clear stale session so next prompt starts fresh
-          console.warn(`[CopilotService] Prompt failed (exit ${code}), clearing session. Error: ${errorOutput.slice(0, 200)}`);
-          this.masterSessionId = undefined;
-          this.sessionIdsByWorkspaceSession.delete(workspaceSessionId);
-          ensureDir(SESSION_FILE);
-          writeFileSync(SESSION_FILE, '# LEXOIRE Master Session\n\nsession-id: (none — reset after failed prompt)\n');
+          // Preserve known session IDs on transient provider failures such as rate limits.
+          // Clearing here loses otherwise resumable provider sessions.
+          console.warn(`[CopilotService] Prompt failed (exit ${code}). Preserving session. Error: ${errorOutput.slice(0, 200)}`);
         } else if (newSessionId) {
           this.masterSessionId = newSessionId;
           this.sessionIdsByWorkspaceSession.set(workspaceSessionId, newSessionId);
+          if (workspaceSessionId !== 'master') this.persistCliSessionId?.(workspaceSessionId, newSessionId);
           saveSessionId(newSessionId, command.prompt);
           console.log(`[CopilotService] Session saved: ${newSessionId}`);
         } else if (sessionId && output.trim()) {
           this.sessionIdsByWorkspaceSession.set(workspaceSessionId, sessionId);
+          if (workspaceSessionId !== 'master') this.persistCliSessionId?.(workspaceSessionId, sessionId);
           saveSessionId(sessionId, command.prompt);
         }
 
@@ -252,6 +271,9 @@ class CopilotService {
 
   newSession() {
     this.masterSessionId = undefined;
+    for (const workspaceSessionId of this.sessionIdsByWorkspaceSession.keys()) {
+      this.clearCliSessionIdFn?.(workspaceSessionId);
+    }
     this.sessionIdsByWorkspaceSession.clear();
     ensureDir(SESSION_FILE);
     writeFileSync(SESSION_FILE, '# LEXOIRE Master Session\n\nsession-id: (none — will be set on next prompt)\n');

@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import os from 'os';
 import { getCommandLookupEnv, resolveCommandBinary } from '../utils/command-resolution';
 
-const SYSTEM_PROMPT = `You are Lexoire, an elite AI assistant integrated into a voice-driven automation system. You have full access to tools and the filesystem. Be concise, direct, and action-oriented. When given a task, do it - don't just describe it.`;
+const SYSTEM_PROMPT = `You are Lexoire, an elite AI assistant integrated into a voice-driven automation system. You have full access to tools and the filesystem. Be concise, direct, and action-oriented. When given a task, do it - don't just describe it. Your answers may be spoken aloud, so prefer short plain-English status and results over long markdown, tables, or noisy logs unless the user explicitly asks for detail.`;
 
 const HOME = os.homedir();
 
@@ -27,9 +27,8 @@ const conversationHistory = new Map<string, Message[]>();
 const sessionIds = new Map<string, string>(); // workspaceSessionId → claude CLI session ID
 
 class ClaudeService {
-  private currentProcess: ChildProcess | null = null;
-  private running = false;
-  private abortRequested = false;
+  private processes = new Map<string, ChildProcess>();
+  private abortRequested = new Set<string>();
   private persistCliSessionId?: PersistCliSessionId;
   private clearCliSessionIdFn?: ClearCliSessionId;
 
@@ -55,7 +54,9 @@ class ClaudeService {
     }
   }
 
-  isRunning() { return this.running; }
+  isRunning(sessionId?: string) {
+    return sessionId ? this.processes.has(sessionId) : this.processes.size > 0;
+  }
 
   getHistory(sessionId: string): Message[] {
     return conversationHistory.get(sessionId) ?? [];
@@ -68,9 +69,23 @@ class ClaudeService {
   }
 
   abort() {
-    if (!this.currentProcess) return false;
-    this.abortRequested = true;
-    this.currentProcess.kill('SIGTERM');
+    return this.abortSession();
+  }
+
+  abortSession(sessionId?: string) {
+    if (sessionId) {
+      const process = this.processes.get(sessionId);
+      if (!process) return false;
+      this.abortRequested.add(sessionId);
+      process.kill('SIGTERM');
+      return true;
+    }
+
+    if (this.processes.size === 0) return false;
+    for (const [runningSessionId, process] of this.processes) {
+      this.abortRequested.add(runningSessionId);
+      process.kill('SIGTERM');
+    }
     return true;
   }
 
@@ -87,8 +102,13 @@ class ClaudeService {
     sessionId: string,
     onChunk: (chunk: string) => void
   ): Promise<PromptResult> {
-    this.running = true;
-    this.abortRequested = false;
+    if (this.processes.has(sessionId)) {
+      return {
+        text: 'Claude is already processing this session. Start another workspace session or wait for this run to finish.',
+      };
+    }
+
+    this.abortRequested.delete(sessionId);
     const history = conversationHistory.get(sessionId) ?? [];
     history.push({ role: 'user', content: text });
 
@@ -104,8 +124,7 @@ class ClaudeService {
         conversationHistory.set(sessionId, history.slice(-40));
       }
     } finally {
-      this.running = false;
-      this.abortRequested = false;
+      this.abortRequested.delete(sessionId);
     }
     return result;
   }
@@ -133,10 +152,11 @@ class ClaudeService {
 
       console.log(`[Claude CLI] ${CLAUDE_CLI} ${args.slice(0, -1).join(' ')} [prompt]`);
 
-      this.currentProcess = spawn(CLAUDE_CLI, args, {
+      const childProcess = spawn(CLAUDE_CLI, args, {
         cwd: process.cwd(),
         env: getCommandLookupEnv(),
       });
+      this.processes.set(sessionId, childProcess);
 
       let full = '';
       let buf = '';
@@ -191,24 +211,24 @@ class ClaudeService {
         }
       };
 
-      this.currentProcess.stdout?.on('data', (data: Buffer) => {
+      childProcess.stdout?.on('data', (data: Buffer) => {
         buf += data.toString();
         const lines = buf.split('\n');
         buf = lines.pop() ?? '';
         for (const line of lines) handleLine(line);
       });
 
-      this.currentProcess.stderr?.on('data', (data: Buffer) => {
+      childProcess.stderr?.on('data', (data: Buffer) => {
         const chunk = data.toString();
         stderrBuf += chunk;
         console.warn('[Claude CLI stderr]', chunk.trim());
       });
 
-      this.currentProcess.on('close', (code) => {
-        this.currentProcess = null;
+      childProcess.on('close', (code) => {
+        this.processes.delete(sessionId);
         if (buf.trim()) handleLine(buf);
-        const wasAborted = this.abortRequested;
-        this.abortRequested = false;
+        const wasAborted = this.abortRequested.has(sessionId);
+        this.abortRequested.delete(sessionId);
 
         if (wasAborted) {
           resolve({ text: full.trim(), aborted: true });
@@ -231,10 +251,10 @@ class ClaudeService {
         resolve({ text: full.trim() });
       });
 
-      this.currentProcess.on('error', (err) => {
-        this.currentProcess = null;
-        const wasAborted = this.abortRequested;
-        this.abortRequested = false;
+      childProcess.on('error', (err) => {
+        this.processes.delete(sessionId);
+        const wasAborted = this.abortRequested.has(sessionId);
+        this.abortRequested.delete(sessionId);
         if (wasAborted) {
           resolve({ text: full.trim(), aborted: true });
           return;

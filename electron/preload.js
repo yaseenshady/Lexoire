@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('lexoire', {
   requestMic: () => ipcRenderer.invoke('mic:request'),
   getMicStatus: () => ipcRenderer.invoke('mic:status'),
   openMicSettings: () => ipcRenderer.invoke('mic:open-settings'),
+  openWindow: () => ipcRenderer.invoke('window:new'),
   startSpeech: () => ipcRenderer.invoke('speech:start'),
   stopSpeechRecognition: () => ipcRenderer.invoke('speech:stop'),
   onSpeech: (cb) => {

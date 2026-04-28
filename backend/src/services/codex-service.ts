@@ -17,15 +17,41 @@ const CODEX_CLI = resolveCodexBinary();
 
 type Message = { role: 'user' | 'assistant'; content: string };
 type PromptResult = { text: string; aborted?: boolean };
+type PersistCliSessionId = (workspaceSessionId: string, cliSessionId: string) => void;
+type ClearCliSessionId = (workspaceSessionId: string) => void;
 const conversationHistory = new Map<string, Message[]>();
 const sessionIds = new Map<string, string>(); // workspaceSessionId → codex session UUID
 
 class CodexService {
-  private currentProcess: ChildProcess | null = null;
-  private running = false;
-  private abortRequested = false;
+  private processes = new Map<string, ChildProcess>();
+  private processWorkspaceIds = new Map<string, string>();
+  private abortRequested = new Set<string>();
+  private nextRunId = 0;
+  private persistCliSessionId?: PersistCliSessionId;
+  private clearCliSessionIdFn?: ClearCliSessionId;
 
-  isRunning() { return this.running; }
+  setPersistence(persist: PersistCliSessionId, clear: ClearCliSessionId): void {
+    this.persistCliSessionId = persist;
+    this.clearCliSessionIdFn = clear;
+  }
+
+  initFromSessions(sessions: Array<{ id: string; metadata?: Record<string, unknown> }>): void {
+    for (const s of sessions) {
+      const cliId = s.metadata?.codexCliSessionId as string | undefined;
+      if (cliId) {
+        sessionIds.set(s.id, cliId);
+        console.log(`[CodexService] Restored CLI session for workspace ${s.id}: ${cliId}`);
+      }
+    }
+  }
+
+  isRunning(sessionId?: string) {
+    if (!sessionId) return this.processes.size > 0;
+    for (const workspaceSessionId of this.processWorkspaceIds.values()) {
+      if (workspaceSessionId === sessionId) return true;
+    }
+    return false;
+  }
 
   getHistory(sessionId: string): Message[] {
     return conversationHistory.get(sessionId) ?? [];
@@ -34,12 +60,30 @@ class CodexService {
   clearHistory(sessionId: string) {
     conversationHistory.delete(sessionId);
     sessionIds.delete(sessionId);
+    this.clearCliSessionIdFn?.(sessionId);
   }
 
   abort() {
-    if (!this.currentProcess) return false;
-    this.abortRequested = true;
-    this.currentProcess.kill('SIGTERM');
+    return this.abortSession();
+  }
+
+  abortSession(sessionId?: string) {
+    if (sessionId) {
+      let aborted = false;
+      for (const [runId, process] of this.processes) {
+        if (this.processWorkspaceIds.get(runId) !== sessionId) continue;
+        this.abortRequested.add(runId);
+        process.kill('SIGTERM');
+        aborted = true;
+      }
+      return aborted;
+    }
+
+    if (this.processes.size === 0) return false;
+    for (const [runId, process] of this.processes) {
+      this.abortRequested.add(runId);
+      process.kill('SIGTERM');
+    }
     return true;
   }
 
@@ -56,18 +100,19 @@ class CodexService {
     sessionId: string,
     onChunk: (chunk: string) => void
   ): Promise<PromptResult> {
-    this.running = true;
-    this.abortRequested = false;
+    const runId = `${sessionId}:${Date.now()}:${++this.nextRunId}`;
+    const hasConcurrentRunForSession = this.isRunning(sessionId);
+    this.abortRequested.delete(runId);
     const history = conversationHistory.get(sessionId) ?? [];
     history.push({ role: 'user', content: text });
 
     let result: PromptResult = { text: '' };
     try {
       const cliSession = sessionIds.get(sessionId);
-      if (cliSession) {
-        result = await this.execResume(cliSession, text, sessionId, onChunk);
+      if (cliSession && !hasConcurrentRunForSession) {
+        result = await this.execResume(cliSession, text, sessionId, runId, onChunk);
       } else {
-        result = await this.execNew(text, sessionId, onChunk);
+        result = await this.execNew(text, sessionId, runId, onChunk);
       }
       if (!result.aborted) {
         history.push({ role: 'assistant', content: result.text });
@@ -76,8 +121,7 @@ class CodexService {
     } catch (err) {
       throw err;
     } finally {
-      this.running = false;
-      this.abortRequested = false;
+      this.abortRequested.delete(runId);
     }
     return result;
   }
@@ -85,6 +129,7 @@ class CodexService {
   private execNew(
     text: string,
     sessionId: string,
+    runId: string,
     onChunk: (chunk: string) => void
   ): Promise<PromptResult> {
     const args = [
@@ -94,13 +139,14 @@ class CodexService {
       '--json',
       text,
     ];
-    return this.runCli(args, sessionId, onChunk);
+    return this.runCli(args, sessionId, runId, onChunk);
   }
 
   private execResume(
     cliSessionId: string,
     text: string,
     sessionId: string,
+    runId: string,
     onChunk: (chunk: string) => void
   ): Promise<PromptResult> {
     const args = [
@@ -111,22 +157,25 @@ class CodexService {
       '--json',
       text,
     ];
-    return this.runCli(args, sessionId, onChunk);
+    return this.runCli(args, sessionId, runId, onChunk);
   }
 
   private runCli(
     args: string[],
     sessionId: string,
+    runId: string,
     onChunk: (chunk: string) => void
   ): Promise<PromptResult> {
     return new Promise((resolve, reject) => {
       console.log(`[Codex CLI] ${CODEX_CLI} ${args.slice(0, -1).join(' ')} [prompt]`);
 
-      this.currentProcess = spawn(CODEX_CLI, args, {
+      const childProcess = spawn(CODEX_CLI, args, {
         cwd: process.cwd(),
         env: getCommandLookupEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      this.processes.set(runId, childProcess);
+      this.processWorkspaceIds.set(runId, sessionId);
 
       let full = '';
       let buf = '';
@@ -201,42 +250,49 @@ class CodexService {
           // Session ID capture
           if (ev.session_id && typeof ev.session_id === 'string') {
             sessionIds.set(sessionId, ev.session_id);
+            this.persistCliSessionId?.(sessionId, ev.session_id);
           }
           if (ev.type === 'session_started' && ev.id) {
             sessionIds.set(sessionId, ev.id);
+            this.persistCliSessionId?.(sessionId, ev.id);
           }
           if (ev.type === 'thread.started' && ev.thread_id) {
             sessionIds.set(sessionId, ev.thread_id);
+            this.persistCliSessionId?.(sessionId, ev.thread_id);
           }
           // Final result fallback
           if (ev.type === 'result' && !streamedTextUsed) {
             const r = ev.result ?? ev.text ?? '';
             if (r) emitText(r);
-            if (ev.session_id) sessionIds.set(sessionId, ev.session_id);
+            if (ev.session_id) {
+              sessionIds.set(sessionId, ev.session_id);
+              this.persistCliSessionId?.(sessionId, ev.session_id);
+            }
           }
         } catch {
           // non-JSON stderr-like lines — ignore silently
         }
       };
 
-      this.currentProcess.stdout?.on('data', (data: Buffer) => {
+      childProcess.stdout?.on('data', (data: Buffer) => {
         buf += data.toString();
         const lines = buf.split('\n');
         buf = lines.pop() ?? '';
         for (const line of lines) handleLine(line);
       });
 
-      this.currentProcess.stderr?.on('data', (data: Buffer) => {
+      childProcess.stderr?.on('data', (data: Buffer) => {
         const chunk = data.toString();
         errorBuffer += chunk;
         console.warn('[Codex CLI stderr]', chunk.trim());
       });
 
-      this.currentProcess.on('close', (code) => {
-        this.currentProcess = null;
+      childProcess.on('close', (code) => {
+        this.processes.delete(runId);
+        this.processWorkspaceIds.delete(runId);
         if (buf.trim()) handleLine(buf);
-        const wasAborted = this.abortRequested;
-        this.abortRequested = false;
+        const wasAborted = this.abortRequested.has(runId);
+        this.abortRequested.delete(runId);
         if (wasAborted) {
           resolve({ text: full.trim(), aborted: true });
           return;
@@ -249,10 +305,11 @@ class CodexService {
         }
       });
 
-      this.currentProcess.on('error', (err) => {
-        this.currentProcess = null;
-        const wasAborted = this.abortRequested;
-        this.abortRequested = false;
+      childProcess.on('error', (err) => {
+        this.processes.delete(runId);
+        this.processWorkspaceIds.delete(runId);
+        const wasAborted = this.abortRequested.has(runId);
+        this.abortRequested.delete(runId);
         if (wasAborted) {
           resolve({ text: full.trim(), aborted: true });
           return;

@@ -762,9 +762,15 @@ ipcMain.handle('mic:open-settings', async () => {
 
 ipcMain.handle('voice:capabilities', async () => getVoiceCapabilities());
 
+ipcMain.handle('window:new', () => {
+  const win = createWindow('http://127.0.0.1:' + LEXOIRE_PORT);
+  return Boolean(win);
+});
+
 // ── Native speech recognition via Swift SFSpeechRecognizer ───────────────
 let speechProcess = null;
 let speechEnabled = false;
+let speechOwnerWebContentsId = null;
 
 function getSpeechBinaryPath() {
   if (app.isPackaged) {
@@ -776,20 +782,23 @@ function getSpeechBinaryPath() {
 
 function startSpeechProcess() {
   if (process.platform !== 'darwin') {
-    broadcastToAllWindows('speech:event', {
+    sendSpeechEvent({
       type: 'error',
       text: 'Native speech recognition is currently available on macOS only.',
     });
     return;
   }
 
-  if (speechProcess) return;
+  if (speechProcess) {
+    sendSpeechEvent({ type: 'ready' });
+    return;
+  }
   try {
     const speechBinaryPath = getSpeechBinaryPath();
     speechProcess = spawn(speechBinaryPath, [], { stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
     console.warn('[Speech] Failed to start:', e.message);
-    broadcastToAllWindows('speech:event', {
+    sendSpeechEvent({
       type: 'error',
       text: `Failed to start native speech recognition: ${e.message}`,
     });
@@ -804,24 +813,24 @@ function startSpeechProcess() {
       const t = line.trim();
       if (!t) continue;
       if (t === 'LEXOIRE_READY') {
-        broadcastToAllWindows('speech:event', { type: 'ready' });
+        sendSpeechEvent({ type: 'ready' });
       } else if (t.startsWith('LEXOIRE_INTERIM:')) {
-        broadcastToAllWindows('speech:event', { type: 'interim', text: t.slice(16) });
+        sendSpeechEvent({ type: 'interim', text: t.slice(16) });
       } else if (t.startsWith('LEXOIRE_FINAL:')) {
-        broadcastToAllWindows('speech:event', { type: 'final', text: t.slice(14) });
+        sendSpeechEvent({ type: 'final', text: t.slice(14) });
       } else if (t.startsWith('LEXOIRE_ERROR:')) {
         const errorText = t.slice(14);
         if (/denied|notDetermined|restricted|permission|privacy|siri|dictation|disabled/i.test(errorText)) {
           speechEnabled = false;
         }
-        broadcastToAllWindows('speech:event', { type: 'error', text: errorText });
+        sendSpeechEvent({ type: 'error', text: errorText });
       }
     }
   });
   speechProcess.stderr.on('data', (d) => console.warn('[Speech]', d.toString().trim()));
   speechProcess.on('error', (error) => {
     speechProcess = null;
-    broadcastToAllWindows('speech:event', {
+    sendSpeechEvent({
       type: 'error',
       text: `Failed to start native speech recognition: ${error.message}`,
     });
@@ -834,6 +843,7 @@ function startSpeechProcess() {
 
 function stopSpeechProcess() {
   speechEnabled = false;
+  speechOwnerWebContentsId = null;
   if (speechProcess) {
     try { speechProcess.kill('SIGTERM'); } catch (_) {}
     speechProcess = null;
@@ -849,12 +859,33 @@ function shutdownChildProcesses() {
   }
 }
 
-ipcMain.handle('speech:start', () => {
+function getSpeechOwnerWindow() {
+  if (speechOwnerWebContentsId !== null) {
+    const owner = BrowserWindow.getAllWindows()
+      .find((win) => !win.isDestroyed() && win.webContents.id === speechOwnerWebContentsId);
+    if (owner) return owner;
+  }
+
+  return BrowserWindow.getFocusedWindow() || mainWindow || (windows.size > 0 ? [...windows][0] : null);
+}
+
+function sendSpeechEvent(data) {
+  const owner = getSpeechOwnerWindow();
+  if (owner && !owner.isDestroyed()) {
+    owner.webContents.send('speech:event', data);
+  }
+}
+
+ipcMain.handle('speech:start', (event) => {
+  speechOwnerWebContentsId = event.sender.id;
   speechEnabled = true;
   startSpeechProcess();
 });
 
-ipcMain.handle('speech:stop', () => {
+ipcMain.handle('speech:stop', (event) => {
+  if (speechOwnerWebContentsId !== null && event.sender.id !== speechOwnerWebContentsId) {
+    return;
+  }
   stopSpeechProcess();
 });
 

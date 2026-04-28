@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, memo } from 'react';
 import { io } from 'socket.io-client';
 import RealisticSphere from './components/RealisticSphere';
+import { ParticleBackground } from './components/ParticleBackground';
 
 const SILENCE_MS = 2000; // 2.0 seconds without new words triggers auto-send
 
@@ -16,7 +17,7 @@ type VoiceBackendCapabilities = {
   transcriptionModels?: string[];
 };
 type NativeMicStatus = 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown';
-interface Msg { id: number; role: 'user' | 'assistant'; text: string; agent?: Agent; createdAt: number; }
+interface Msg { id: number; role: 'user' | 'assistant'; text: string; agent?: Agent; createdAt: number; streamRequestId?: string; }
 interface SavedConversationMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -51,6 +52,7 @@ interface SessionRestorePayload {
 interface CommandResponsePayload {
   result?: string;
   sessionId?: string;
+  requestId?: string;
   status?: 'busy' | 'ok' | 'error';
   suppressSpeech?: boolean;
   cue?: 'bubble';
@@ -71,6 +73,13 @@ interface QueuedPrompt {
   agent: Agent;
   sessionId?: string;
   createdAt: number;
+}
+
+interface ActiveStream {
+  messageId: number;
+  provider: Agent;
+  text: string;
+  suppressSpeech: boolean;
 }
 
 const AUDIO_INPUT_CONSTRAINTS: MediaStreamConstraints = {
@@ -260,10 +269,34 @@ function renderMessageText(text: string) {
 }
 
 function stripSpeechMarkup(text: string) {
-  return text
+  const withoutCode = text
+    .replace(/```[\s\S]*?```/g, ' Code omitted. ')
+    .replace(/~~~[\s\S]*?~~~/g, ' Code omitted. ');
+
+  return withoutCode
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !/^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(line))
+    .filter((line) => !/^\|.*\|$/.test(line))
+    .filter((line) => !/^\s*(?:[-*_]\s*){3,}$/.test(line))
+    .map((line) => line
+      .replace(/^#{1,6}\s+/g, '')
+      .replace(/^\s*[-*+]\s+/g, '')
+      .replace(/^\s*\d+[.)]\s+/g, '')
+      .replace(/^\s*>\s?/g, '')
+    )
+    .join('. ')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
-    .replace(/[_#>*~-]+/g, ' ')
+    .replace(/[▶◀◉⚠]/g, '')
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, ' link omitted ')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/([.!?])\s*([.!?])+/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -401,6 +434,7 @@ export default function App() {
   const speechQueueRef = useRef<string[]>([]);
   const streamedResponseRef = useRef('');
   const activeStreamMsgIdRef = useRef<number | null>(null);
+  const activeStreamsRef = useRef<Map<string, ActiveStream>>(new Map());
   const speechStreamBufferRef = useRef('');
   const hasSpeechStreamedRef = useRef(false);
   const speechActiveRef = useRef(false);
@@ -1011,16 +1045,21 @@ export default function App() {
       speechStreamBufferRef.current = buf;
     };
 
-    const appendChunk = (provider: Agent, chunk: string) => {
-      if (activeStreamMsgIdRef.current === null || activeResponseAgentRef.current !== provider) {
+    const appendChunk = (provider: Agent, chunk: string, requestId?: string) => {
+      const stream = requestId ? activeStreamsRef.current.get(requestId) : undefined;
+      const activeMessageId = stream?.messageId ?? activeStreamMsgIdRef.current;
+      if (activeMessageId === null || (!stream && activeResponseAgentRef.current !== provider)) {
         return;
       }
       busyRef.current = true;
       setBusy(true);
       startResponseTimer(provider);
-      streamedResponseRef.current += chunk;
-      const activeMessageId = activeStreamMsgIdRef.current;
-      const streamedChars = streamedResponseRef.current.length;
+      if (stream) {
+        stream.text += chunk;
+      } else {
+        streamedResponseRef.current += chunk;
+      }
+      const streamedChars = stream?.text.length ?? streamedResponseRef.current.length;
       setStreamStatus(prev => ({
         provider: prev?.provider ?? provider,
         phase: 'chunk',
@@ -1039,33 +1078,54 @@ export default function App() {
         }
         return prev;
       });
-      speakStreamedWords(chunk);
+      // Keep streaming visual-only. Starting a new TTS job for streamed fragments
+      // creates long gaps and repeatedly steals the mic while the model is still
+      // producing text. Final responses are still spoken through the normal path.
     };
 
     const handleResponse = (data: CommandResponsePayload, ag?: Agent) => {
       const provider = ag ?? agentRef.current;
-      if (activeResponseAgentRef.current && activeResponseAgentRef.current !== provider) {
+      const stream = data.requestId ? activeStreamsRef.current.get(data.requestId) : undefined;
+      if (!stream && activeResponseAgentRef.current && activeResponseAgentRef.current !== provider) {
         return;
       }
       logDebug(`${(ag || agentRef.current).toUpperCase()} response complete`);
       clearResponseTimer();
       if (data.sessionId) setCurrentSessionId(data.sessionId);
-      const activeMessageId = activeStreamMsgIdRef.current;
+      const activeMessageId = stream?.messageId ?? activeStreamMsgIdRef.current;
+      const removeCompletedStream = () => {
+        if (data.requestId) {
+          activeStreamsRef.current.delete(data.requestId);
+          return;
+        }
+        if (activeMessageId !== null) {
+          for (const [streamRequestId, activeStream] of activeStreamsRef.current) {
+            if (activeStream.messageId === activeMessageId) {
+              activeStreamsRef.current.delete(streamRequestId);
+              return;
+            }
+          }
+        }
+      };
       if (data.aborted) {
-        busyRef.current = false;
-        setBusy(false);
+        removeCompletedStream();
+        const stillBusy = activeStreamsRef.current.size > 0;
+        busyRef.current = stillBusy;
+        setBusy(stillBusy);
         streamedResponseRef.current = '';
         speechStreamBufferRef.current = '';
         hasSpeechStreamedRef.current = false;
         suppressCurrentResponseSpeechRef.current = false;
-        setActiveStreamingMessage(null);
-        setStreamStatus(null);
-        activeResponseAgentRef.current = null;
+        if (!stillBusy) {
+          setActiveStreamingMessage(null);
+          setStreamStatus(null);
+          activeResponseAgentRef.current = null;
+        }
         if (!speechActiveRef.current) scheduleListeningResume(120);
-        processNextQueuedPrompt();
+        if (!stillBusy) processNextQueuedPrompt();
         return;
       }
-      const responseSpeechSuppressed = suppressCurrentResponseSpeechRef.current || Boolean(data.suppressSpeech);
+      const responseSpeechSuppressed = (stream?.suppressSpeech ?? suppressCurrentResponseSpeechRef.current) || Boolean(data.suppressSpeech);
 
       // Flush any remaining streamed speech buffer
       const streamRemainder = stripSpeechMarkup(speechStreamBufferRef.current).trim();
@@ -1076,7 +1136,7 @@ export default function App() {
       const fallbackText = data.result?.trim() || '';
       const safeFallback = fallbackText === '(no output)' ? '[No output from agent]' : fallbackText;
       const finalFallback = safeFallback;
-      let spokenText = streamedResponseRef.current.trim() || finalFallback;
+      let spokenText = stream?.text.trim() || streamedResponseRef.current.trim() || finalFallback;
       setMsgs(prev => {
         const targetIndex = activeMessageId !== null
           ? prev.findIndex(msg => msg.id === activeMessageId)
@@ -1096,33 +1156,38 @@ export default function App() {
         return finalText ? [...prev, { id: nextId.current++, role: 'assistant', text: finalText, agent: ag, createdAt: Date.now() }] : prev;
       });
 
+      const shouldSpeakThisResponse = !data.requestId || activeStreamMsgIdRef.current === activeMessageId;
       if (data.cue === 'bubble') {
         playBubbleCue();
-      } else if (!responseSpeechSuppressed && (usedStreamSpeech || streamRemainder)) {
+      } else if (shouldSpeakThisResponse && !responseSpeechSuppressed && (usedStreamSpeech || streamRemainder)) {
         // Already streaming TTS — just flush the last fragment
         if (streamRemainder) _speak(streamRemainder);
         else if (!speechActiveRef.current && speechQueueRef.current.length === 0) scheduleListeningResume();
-      } else if (!responseSpeechSuppressed && spokenText) {
+      } else if (shouldSpeakThisResponse && !responseSpeechSuppressed && spokenText) {
         _speak(spokenText);
       } else if (!speechActiveRef.current) {
         scheduleListeningResume();
       }
 
-      busyRef.current = false;
-      setBusy(false);
+      removeCompletedStream();
+      const stillBusy = activeStreamsRef.current.size > 0;
+      busyRef.current = stillBusy;
+      setBusy(stillBusy);
       streamedResponseRef.current = '';
       suppressCurrentResponseSpeechRef.current = false;
-      setActiveStreamingMessage(null);
-      setStreamStatus(null);
-      activeResponseAgentRef.current = null;
-      processNextQueuedPrompt();
+      if (!stillBusy) {
+        setActiveStreamingMessage(null);
+        setStreamStatus(null);
+        activeResponseAgentRef.current = null;
+      }
+      if (!stillBusy) processNextQueuedPrompt();
     };
 
-    sock.on('command:chunk', (data: any) => { if (data.chunk) appendChunk('copilot', data.chunk); });
+    sock.on('command:chunk', (data: any) => { if (data.chunk) appendChunk('copilot', data.chunk, data.requestId); });
     sock.on('command:response', (data: CommandResponsePayload) => handleResponse(data, 'copilot'));
-    sock.on('claude:chunk',    (data: any) => { if (data.chunk) appendChunk('claude', data.chunk); });
+    sock.on('claude:chunk',    (data: any) => { if (data.chunk) appendChunk('claude', data.chunk, data.requestId); });
     sock.on('claude:response', (data: CommandResponsePayload) => handleResponse(data, 'claude'));
-    sock.on('codex:chunk',     (data: any) => { if (data.chunk) appendChunk('codex', data.chunk); });
+    sock.on('codex:chunk',     (data: any) => { if (data.chunk) appendChunk('codex', data.chunk, data.requestId); });
     sock.on('codex:response',  (data: CommandResponsePayload) => handleResponse(data, 'codex'));
     sock.on('agent:status', (data: any) => {
       const providerKey = String(data?.provider || 'copilot').toLowerCase() as Agent;
@@ -1417,7 +1482,8 @@ export default function App() {
     setActiveStreamingMessage(null);
     setStreamStatus(null);
     activeResponseAgentRef.current = null;
-    socketRef.current?.emit(`${provider}:abort`);
+    activeStreamsRef.current.clear();
+    socketRef.current?.emit(`${provider}:abort`, { sessionId: activeWorkspaceSessionId || undefined });
     return true;
   };
 
@@ -2251,6 +2317,7 @@ export default function App() {
           branch: branch || undefined,
           objective: objective || undefined,
           session_id: sessionId || undefined,
+          provider: selectedAgent,
         }),
       });
       if (!response.ok) {
@@ -2526,10 +2593,17 @@ export default function App() {
     resetInterruptionCandidate();
     activeResponseAgentRef.current = provider;
     const streamingMessageId = nextId.current++;
+    const requestId = `req-${Date.now()}-${streamingMessageId}`;
+    activeStreamsRef.current.set(requestId, {
+      messageId: streamingMessageId,
+      provider,
+      text: '',
+      suppressSpeech: false,
+    });
     setActiveStreamingMessage(streamingMessageId);
     setStreamStatus({ provider, phase: 'start', detail: 'awaiting response' });
     // Add placeholder bubble tagged with current agent
-    setMsgs(prev => [...prev, { id: streamingMessageId, role: 'assistant', text: '', agent: provider, createdAt: Date.now() }]);
+    setMsgs(prev => [...prev, { id: streamingMessageId, role: 'assistant', text: '', agent: provider, createdAt: Date.now(), streamRequestId: requestId }]);
     playSendCue();
 
     const lower = cmd.toLowerCase();
@@ -2544,7 +2618,7 @@ export default function App() {
       const ev = provider === 'claude' ? 'claude:prompt'
                : provider === 'codex'  ? 'codex:prompt'
                 : 'copilot:prompt';
-      socketRef.current?.emit(ev, { prompt: cmd, sessionId: routedSessionId });
+      socketRef.current?.emit(ev, { prompt: cmd, sessionId: routedSessionId, requestId });
     }
 
     startResponseTimer(provider);
@@ -2573,13 +2647,6 @@ export default function App() {
       addMsg('user', cmd);
       addMsg('assistant', localResponse);
       _speak(localResponse);
-      return;
-    }
-
-    if (busyRef.current) {
-      console.log('[SEND] Queueing: already busy');
-      enqueueQueuedPrompt(cmd, agentRef.current, activeWorkspaceSessionId || undefined);
-      scheduleListeningResume(180);
       return;
     }
 
@@ -2748,7 +2815,7 @@ export default function App() {
 
   const _speak = (text: string) => {
     if (!voiceRepliesRef.current) return;
-    const clean = stripSpeechMarkup(text).replace(/[▶◀◉⚠]/g, '').trim();
+    const clean = stripSpeechMarkup(text);
     if (!clean) return;
     // Split into sentence segments so long responses are fully spoken, not truncated.
     // Cap total spoken content at ~1500 chars to avoid reading enormous outputs forever.
@@ -2783,12 +2850,15 @@ export default function App() {
 
   return (
     <div style={{
-      width: '100vw', height: '100vh',
+      width: '100vw', height: '100vh', minHeight: '100dvh',
       background: 'radial-gradient(ellipse at 50% 0%, #071a0e 0%, #040a06 55%, #020504 100%)',
       color: '#c8ffd4', fontFamily: '"SF Mono", "Fira Code", "Courier New", monospace',
       display: 'flex', flexDirection: 'column', overflow: 'hidden',
       userSelect: 'none',
+      position: 'relative',
     }}>
+      <ParticleBackground />
+
       {/* ── Danger Warning Banner ── */}
       {!warnDismissed && (
         <div style={{
@@ -2815,7 +2885,7 @@ export default function App() {
       )}
 
       {/* ── Header ── */}
-      <div style={{
+      <div className="lexoire-window-drag" style={{
         padding: '12px 80px 12px 20px',
         borderBottom: '1px solid #10ff5015',
         background: 'linear-gradient(135deg, rgba(1, 30, 12, 0.8), rgba(5, 20, 8, 0.6))',
@@ -2829,7 +2899,7 @@ export default function App() {
         <span style={{ fontSize: 10, letterSpacing: 4, color: '#10ff5060', textTransform: 'uppercase' }}>AI ORCHESTRATOR</span>
 
         {/* ── Agent selector ── */}
-        <div style={{ display: 'flex', gap: 2, marginLeft: 20, background: 'rgba(0,0,0,0.4)', borderRadius: 8, padding: 3, border: '1px solid #ffffff10', flexWrap: 'wrap' }}>
+        <div className="lexoire-no-drag" style={{ display: 'flex', gap: 2, marginLeft: 20, background: 'rgba(0,0,0,0.4)', borderRadius: 8, padding: 3, border: '1px solid #ffffff10', flexWrap: 'wrap' }}>
           {(['copilot', 'claude', 'codex'] as Agent[]).map(ag => {
             const c = AGENT_COLORS[ag];
             const active = agent === ag;
@@ -2852,7 +2922,7 @@ export default function App() {
           })}
         </div>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, position: 'relative', flexWrap: 'wrap', justifyContent: 'flex-end', flex: '1 1 360px' }}>
+        <div className="lexoire-no-drag" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, position: 'relative', flexWrap: 'wrap', justifyContent: 'flex-end', flex: '1 1 360px' }}>
           <button onClick={() => setSessionDropdownOpen(v => !v)} style={{
             background: 'linear-gradient(135deg, rgba(16, 255, 80, 0.12), rgba(0, 204, 120, 0.05))',
             border: '1px solid #10ff5030',
@@ -2862,6 +2932,28 @@ export default function App() {
             textTransform: 'uppercase',
           }}>
             Sessions {shortSessionId} {sessionDropdownOpen ? 'Close' : 'Open'}
+          </button>
+          <button
+            onClick={() => {
+              void window.lexoire?.openWindow?.();
+            }}
+            title="Open a new Lexoire window"
+            style={{
+              background: 'linear-gradient(135deg, rgba(122, 215, 255, 0.14), rgba(0, 90, 160, 0.08))',
+              border: '1.5px solid #7ad7ff45',
+              color: '#b9ecff',
+              fontFamily: 'inherit',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 1,
+              padding: '7px 12px',
+              cursor: 'pointer',
+              borderRadius: 6,
+              textTransform: 'uppercase',
+              boxShadow: '0 0 16px rgba(122, 215, 255, 0.12)',
+            }}
+          >
+            + Window
           </button>
           {queuedPromptCount > 0 && <span style={{ fontSize: 10, letterSpacing: 1.6, color: '#ffd36a', textTransform: 'uppercase' }}>Queue {queuedPromptCount}</span>}
           {speechQueueCount > 0 && <span style={{ fontSize: 10, letterSpacing: 1.6, color: '#7ad7ff', textTransform: 'uppercase' }}>Voice {speechQueueCount}</span>}
@@ -3306,7 +3398,7 @@ export default function App() {
       </div>
 
       {/* ── Body: sphere on top, chat below ── */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', zIndex: 1 }}>
         {/* ── Sphere (top center, fixed height) ── */}
         <div style={{
           flexShrink: 0, height: 380,
@@ -3733,6 +3825,22 @@ export default function App() {
 
       <style>{`
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+        .lexoire-window-drag {
+          -webkit-app-region: drag;
+          cursor: grab;
+        }
+        .lexoire-window-drag:active {
+          cursor: grabbing;
+        }
+        .lexoire-no-drag,
+        .lexoire-no-drag *,
+        button,
+        input,
+        textarea,
+        select,
+        a {
+          -webkit-app-region: no-drag;
+        }
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #00ff2240; border-radius: 2px; }
