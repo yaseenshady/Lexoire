@@ -13,7 +13,7 @@ if (!electronVersion) {
   process.exit(1);
 }
 
-rmSync(targetDir, { recursive: true, force: true });
+rmSync(targetDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 });
 cpSync(sourceDir, targetDir, { recursive: true, verbatimSymlinks: true });
 writeFileSync(
   path.join(rootDir, 'electron', 'package.json'),

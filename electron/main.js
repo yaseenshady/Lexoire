@@ -2,19 +2,16 @@ const { app, BrowserWindow, Menu, session, systemPreferences, ipcMain, shell: el
 const { existsSync } = require('fs');
 const path = require('path');
 const http = require('http');
+const net = require('net');
 const { spawn, exec, execFileSync, spawnSync } = require('child_process');
 
 // Suppress EPIPE crashes (happens when terminal pipe closes while backend logs)
 process.on('uncaughtException', (err) => { if (err.code !== 'EPIPE') throw err; });
 app.commandLine.appendSwitch('disable-http-cache');
 
-const LEXOIRE_PORT = 7337;
+const DEFAULT_LEXOIRE_PORT = Number.parseInt(process.env.LEXOIRE_PORT || '7337', 10);
+let LEXOIRE_PORT = Number.isFinite(DEFAULT_LEXOIRE_PORT) ? DEFAULT_LEXOIRE_PORT : 7337;
 const APP_PROFILE_CANDIDATES = ['lexoire-voice-automation', 'LEXOIRE'];
-const singleInstanceLock = app.requestSingleInstanceLock();
-
-if (!singleInstanceLock) {
-  app.exit(0);
-}
 
 function configureProfilePaths() {
   if (!app.isPackaged) return;
@@ -31,7 +28,8 @@ function configureProfilePaths() {
 
 configureProfilePaths();
 
-let mainWindow;
+const windows = new Set(); // Track all open BrowserWindow instances
+let mainWindow;            // Points to the most-recently-focused window
 let backendProcess;
 
 const resourcesPath = app.isPackaged
@@ -87,6 +85,25 @@ function waitForBackend(port, maxWaitMs = 30000) {
     };
     setTimeout(attempt, 500);
   });
+}
+
+function isPortAvailable(port) {
+  if (listListeningPids(port).length > 0) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, '0.0.0.0');
+  });
+}
+
+async function findAvailablePort(startPort) {
+  for (let port = startPort; port < startPort + 100; port += 1) {
+    if (await isPortAvailable(port)) return port;
+  }
+  throw new Error(`Unable to find an available backend port starting at ${startPort}.`);
 }
 
 function listListeningPids(port) {
@@ -241,14 +258,15 @@ function cleanupStaleSpeechProcesses(exceptPid) {
 }
 
 function getBackendRuntime() {
+  const defaultDbPath = app.isPackaged
+    ? path.join(app.getPath('userData'), LEXOIRE_PORT === 7337 ? 'lexoire.db' : `lexoire-${LEXOIRE_PORT}.db`)
+    : (process.env.DB_PATH || '');
   const env = {
     ...process.env,
     PORT: String(LEXOIRE_PORT),
     LEXOIRE_STRICT_PORT: '1',
     NODE_ENV: 'production',
-    DB_PATH: app.isPackaged
-      ? path.join(app.getPath('userData'), 'lexoire.db')
-      : (process.env.DB_PATH || ''),
+    DB_PATH: defaultDbPath,
   };
 
   if (app.isPackaged) {
@@ -271,11 +289,11 @@ function getBackendRuntime() {
   };
 }
 
-function startBackend() {
+async function startBackend() {
   const backendPath = path.join(resourcesPath, 'backend', 'dist', 'server.js');
   const backendCwd = app.isPackaged ? app.getPath('userData') : path.join(resourcesPath, 'backend');
+  LEXOIRE_PORT = await findAvailablePort(LEXOIRE_PORT);
   const runtime = getBackendRuntime();
-  cleanupStaleBackend(LEXOIRE_PORT);
   console.log('Starting backend:', backendPath, 'on port', LEXOIRE_PORT);
 
   backendProcess = spawn(runtime.command, [...runtime.args, backendPath], {
@@ -296,52 +314,21 @@ function startBackend() {
   return waitForBackend(LEXOIRE_PORT);
 }
 
-function createWindow(initialUrl) {
-  const windowOptions = {
-    width: 1400,
-    height: 900,
-    minWidth: 900,
-    minHeight: 600,
-    backgroundColor: '#060808',
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      webSecurity: false,
-      preload: path.join(__dirname, 'preload.js'),
-    },
-    icon: path.join(__dirname, 'assets', 'icon.png'),
-    title: 'LEXOIRE',
-    show: false,
-  };
-
-  if (process.platform === 'darwin') {
-    windowOptions.titleBarStyle = 'hiddenInset';
+function broadcastToAllWindows(channel, data) {
+  for (const win of windows) {
+    if (!win.isDestroyed()) win.webContents.send(channel, data);
   }
+}
 
-  mainWindow = new BrowserWindow({
-    ...windowOptions,
-  });
-
-  mainWindow.once('ready-to-show', () => mainWindow.show());
-
-  const url = initialUrl || ('http://127.0.0.1:' + LEXOIRE_PORT);
-  console.log('Loading:', url);
-  mainWindow.loadURL(url);
-
-  if (!initialUrl) {
-    mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
-      console.error('Load failed:', code, desc);
-      setTimeout(() => mainWindow && mainWindow.loadURL(url), 2000);
-    });
-  }
-
-  mainWindow.on('closed', () => { mainWindow = null; });
-
+function buildMenu() {
+  const getFocused = () => BrowserWindow.getFocusedWindow() || (windows.size > 0 ? [...windows][0] : null);
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
       label: 'LEXOIRE',
       submenu: [
-        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => mainWindow && mainWindow.reload() },
+        { label: 'New Window', accelerator: 'CmdOrCtrl+N', click: () => createWindow() },
+        { type: 'separator' },
+        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => { const w = getFocused(); if (w) w.reload(); } },
         { type: 'separator' },
         { label: 'Quit LEXOIRE', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
       ],
@@ -371,6 +358,60 @@ function createWindow(initialUrl) {
       ],
     },
   ]));
+}
+
+function createWindow(initialUrl) {
+  const windowOptions = {
+    width: 1400,
+    height: 900,
+    minWidth: 900,
+    minHeight: 600,
+    backgroundColor: '#060808',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: false,
+      preload: path.join(__dirname, 'preload.js'),
+    },
+    icon: path.join(__dirname, 'assets', 'icon.png'),
+    title: 'LEXOIRE',
+    show: false,
+  };
+
+  if (process.platform === 'darwin') {
+    windowOptions.titleBarStyle = 'hiddenInset';
+  }
+
+  const win = new BrowserWindow({
+    ...windowOptions,
+  });
+
+  windows.add(win);
+  mainWindow = win;
+
+  win.once('ready-to-show', () => win.show());
+  win.on('focus', () => { mainWindow = win; });
+
+  const url = initialUrl || ('http://127.0.0.1:' + LEXOIRE_PORT);
+  console.log('Loading:', url);
+  win.loadURL(url);
+
+  if (!initialUrl) {
+    win.webContents.on('did-fail-load', (_e, code, desc) => {
+      console.error('Load failed:', code, desc);
+      setTimeout(() => { if (!win.isDestroyed()) win.loadURL(url); }, 2000);
+    });
+  }
+
+  win.on('closed', () => {
+    windows.delete(win);
+    if (mainWindow === win) {
+      mainWindow = windows.size > 0 ? [...windows][0] : null;
+    }
+  });
+
+  buildMenu();
+  return win;
 }
 
 // ── TTS fallback queue ───────────────────────────────────────────────────────
@@ -735,7 +776,7 @@ function getSpeechBinaryPath() {
 
 function startSpeechProcess() {
   if (process.platform !== 'darwin') {
-    mainWindow?.webContents.send('speech:event', {
+    broadcastToAllWindows('speech:event', {
       type: 'error',
       text: 'Native speech recognition is currently available on macOS only.',
     });
@@ -743,13 +784,12 @@ function startSpeechProcess() {
   }
 
   if (speechProcess) return;
-  cleanupStaleSpeechProcesses();
   try {
     const speechBinaryPath = getSpeechBinaryPath();
     speechProcess = spawn(speechBinaryPath, [], { stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
     console.warn('[Speech] Failed to start:', e.message);
-    mainWindow?.webContents.send('speech:event', {
+    broadcastToAllWindows('speech:event', {
       type: 'error',
       text: `Failed to start native speech recognition: ${e.message}`,
     });
@@ -764,24 +804,24 @@ function startSpeechProcess() {
       const t = line.trim();
       if (!t) continue;
       if (t === 'LEXOIRE_READY') {
-        mainWindow?.webContents.send('speech:event', { type: 'ready' });
+        broadcastToAllWindows('speech:event', { type: 'ready' });
       } else if (t.startsWith('LEXOIRE_INTERIM:')) {
-        mainWindow?.webContents.send('speech:event', { type: 'interim', text: t.slice(16) });
+        broadcastToAllWindows('speech:event', { type: 'interim', text: t.slice(16) });
       } else if (t.startsWith('LEXOIRE_FINAL:')) {
-        mainWindow?.webContents.send('speech:event', { type: 'final', text: t.slice(14) });
+        broadcastToAllWindows('speech:event', { type: 'final', text: t.slice(14) });
       } else if (t.startsWith('LEXOIRE_ERROR:')) {
         const errorText = t.slice(14);
         if (/denied|notDetermined|restricted|permission|privacy|siri|dictation|disabled/i.test(errorText)) {
           speechEnabled = false;
         }
-        mainWindow?.webContents.send('speech:event', { type: 'error', text: errorText });
+        broadcastToAllWindows('speech:event', { type: 'error', text: errorText });
       }
     }
   });
   speechProcess.stderr.on('data', (d) => console.warn('[Speech]', d.toString().trim()));
   speechProcess.on('error', (error) => {
     speechProcess = null;
-    mainWindow?.webContents.send('speech:event', {
+    broadcastToAllWindows('speech:event', {
       type: 'error',
       text: `Failed to start native speech recognition: ${error.message}`,
     });
@@ -849,19 +889,12 @@ app.on('ready', async () => {
       <html><body style="margin:0;background:#050807;color:#d4ffe0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh">
         <div style="max-width:560px;padding:32px;border:1px solid rgba(16,255,80,.2);border-radius:18px;background:rgba(6,18,10,.88);box-shadow:0 20px 60px rgba(0,0,0,.35)">
           <h1 style="margin:0 0 12px;font-size:28px;color:#10ff50">LEXOIRE backend unavailable</h1>
-          <p style="margin:0 0 10px;line-height:1.5">The local backend could not claim port ${LEXOIRE_PORT}, so voice commands and Copilot orchestration are unavailable.</p>
+          <p style="margin:0 0 10px;line-height:1.5">The local backend could not start on an available port, so voice commands and Copilot orchestration are unavailable.</p>
           <pre style="white-space:pre-wrap;color:#9fe7b0;background:#031108;padding:12px;border-radius:10px">${String(err.message || err)}</pre>
         </div>
       </body></html>
     `)}`);
   }
-});
-
-app.on('second-instance', () => {
-  if (!mainWindow) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
 });
 
 app.on('before-quit', () => {

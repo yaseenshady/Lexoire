@@ -125,6 +125,7 @@ class CodexService {
       this.currentProcess = spawn(CODEX_CLI, args, {
         cwd: process.cwd(),
         env: getCommandLookupEnv(),
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
 
       let full = '';
@@ -137,6 +138,14 @@ class CodexService {
         onChunk(textValue);
         full += textValue;
         streamedTextUsed = true;
+      };
+
+      const emitTextInUiChunks = (textValue: unknown) => {
+        if (typeof textValue !== 'string' || !textValue) return;
+        const chunkSize = 32;
+        for (let index = 0; index < textValue.length; index += chunkSize) {
+          emitText(textValue.slice(index, index + chunkSize));
+        }
       };
 
       const emitContentBlocks = (content: unknown) => {
@@ -181,7 +190,7 @@ class CodexService {
           // Current Codex CLI JSONL emits final assistant text as:
           // { type: "item.completed", item: { type: "agent_message", text: "..." } }
           if (ev.type === 'item.completed' && ev.item?.type === 'agent_message') {
-            emitText(ev.item.text);
+            emitTextInUiChunks(ev.item.text);
           }
           if (ev.type === 'item.completed' && ev.item?.type === 'message' && ev.item?.role === 'assistant') {
             emitContentBlocks(ev.item.content);
