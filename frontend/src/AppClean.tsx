@@ -142,10 +142,10 @@ function renderInline(text: string, keyPrefix: string) {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
   return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={`${keyPrefix}-${i}`} style={{ fontWeight: 800 }}>{part.slice(2, -2)}</strong>;
+      return <strong key={`${keyPrefix}-b${i}`} style={{ fontWeight: 800 }}>{part.slice(2, -2)}</strong>;
     }
     if (part.startsWith('`') && part.endsWith('`')) {
-      return <code key={`${keyPrefix}-${i}`} style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 4, padding: '1px 4px' }}>{part.slice(1, -1)}</code>;
+      return <code key={`${keyPrefix}-c${i}`} style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 4, padding: '1px 4px' }}>{part.slice(1, -1)}</code>;
     }
     return part;
   });
@@ -153,26 +153,56 @@ function renderInline(text: string, keyPrefix: string) {
 
 function renderMessageText(text: string) {
   const lines = text.split('\n');
-  return lines.map((line, index) => {
-    const h3 = line.match(/^###\s+(.*)/);
-    if (h3) {
-      return <div key={index} style={{ fontWeight: 800, fontSize: '0.95em', marginTop: 10, marginBottom: 2, opacity: 0.95 }}>{renderInline(h3[1], `${index}`)}</div>;
-    }
-    const h2 = line.match(/^##\s+(.*)/);
-    if (h2) {
-      return <div key={index} style={{ fontWeight: 800, fontSize: '1.05em', marginTop: 12, marginBottom: 2 }}>{renderInline(h2[1], `${index}`)}</div>;
-    }
-    const h1 = line.match(/^#\s+(.*)/);
-    if (h1) {
-      return <div key={index} style={{ fontWeight: 800, fontSize: '1.15em', marginTop: 14, marginBottom: 4 }}>{renderInline(h1[1], `${index}`)}</div>;
-    }
-    return (
-      <span key={index}>
-        {index > 0 && '\n'}
-        {renderInline(line, `${index}`)}
+  const elements: React.ReactNode[] = [];
+  let pendingText: string[] = [];
+
+  const flushText = () => {
+    if (!pendingText.length) return;
+    elements.push(
+      <span key={`t${elements.length}`} style={{ whiteSpace: 'pre-wrap' }}>
+        {pendingText.join('\n')}
       </span>
     );
+    pendingText = [];
+  };
+
+  lines.forEach((line, i) => {
+    const h3 = line.match(/^###\s+(.*)/);
+    const h2 = line.match(/^##\s+(.*)/);
+    const h1 = line.match(/^#\s+(.*)/);
+    const bullet = line.match(/^[-*]\s+(.*)/);
+    const numbered = line.match(/^(\d+)\.\s+(.*)/);
+
+    if (h3 || h2 || h1 || bullet || numbered) {
+      flushText();
+      if (h3) {
+        elements.push(<div key={i} style={{ fontWeight: 800, fontSize: '0.95em', marginTop: elements.length ? 10 : 0, marginBottom: 2 }}>{renderInline(h3[1], `${i}`)}</div>);
+      } else if (h2) {
+        elements.push(<div key={i} style={{ fontWeight: 800, fontSize: '1.05em', marginTop: elements.length ? 12 : 0, marginBottom: 2 }}>{renderInline(h2[1], `${i}`)}</div>);
+      } else if (h1) {
+        elements.push(<div key={i} style={{ fontWeight: 800, fontSize: '1.15em', marginTop: elements.length ? 14 : 0, marginBottom: 4 }}>{renderInline(h1[1], `${i}`)}</div>);
+      } else if (bullet) {
+        elements.push(
+          <div key={i} style={{ display: 'flex', gap: 7, marginTop: 3 }}>
+            <span style={{ marginTop: '0.45em', width: 5, height: 5, minWidth: 5, minHeight: 5, borderRadius: '50%', background: 'currentColor', opacity: 0.6, display: 'inline-block' }} />
+            <span>{renderInline(bullet[1], `${i}`)}</span>
+          </div>
+        );
+      } else if (numbered) {
+        elements.push(
+          <div key={i} style={{ display: 'flex', gap: 7, marginTop: 3 }}>
+            <span style={{ opacity: 0.6, minWidth: '1.4em', textAlign: 'right' }}>{numbered[1]}.</span>
+            <span>{renderInline(numbered[2], `${i}`)}</span>
+          </div>
+        );
+      }
+    } else {
+      pendingText.push(line);
+    }
   });
+
+  flushText();
+  return elements;
 }
 
 function stripSpeechMarkup(text: string) {
