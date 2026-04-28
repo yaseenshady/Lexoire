@@ -1110,14 +1110,15 @@ export default function App() {
           listeningRef.current = false;
           setListening(false);
           clearListeningRestartTimer();
-          if (!micPermissionNoticeRef.current) {
+          if (micProblem && !siriProblem && !micPermissionNoticeRef.current) {
             micPermissionNoticeRef.current = true;
             addMsg(
               'assistant',
-              siriProblem
-                ? '[ERROR] macOS speech recognition requires Siri & Dictation to be enabled. Go to System Settings → Siri & Spotlight → enable Siri, then System Settings → Keyboard → Dictation → turn Dictation on. Restart Lexoire after.'
-                : '[ERROR] Microphone or Speech Recognition permission is blocked. Enable both in System Settings > Privacy & Security, then restart Lexoire.',
+              '[ERROR] Microphone permission is blocked. Enable Microphone in System Settings > Privacy & Security, then restart Lexoire.',
             );
+          }
+          if (siriProblem || !micProblem) {
+            void startPreferredSpeechFallback(`Native macOS speech recognition failed: ${errorText}`);
           }
           return;
         }
@@ -1833,16 +1834,6 @@ export default function App() {
         const macNativeOnly = lexoire?.platform === 'darwin';
         const nativeSpeechSupported = capabilities?.nativeSpeechRecognition ?? (lexoire?.platform === 'darwin' && Boolean(startNativeSpeech));
 
-        if (macNativeOnly && (!nativeSpeechSupported || !startNativeSpeech)) {
-          listeningRef.current = false;
-          setListening(false);
-          if (!speechUnavailableNoticeRef.current) {
-            speechUnavailableNoticeRef.current = true;
-            addMsg('assistant', '[ERROR] Native macOS speech recognition is unavailable in this build. Restore the bundled LexoireSpeech helper or relaunch a build that includes it.');
-          }
-          return;
-        }
-
         if (!nativeSpeechSupported || !startNativeSpeech) {
           return startPreferredSpeechFallback('Native speech recognition unavailable.');
         }
@@ -1889,19 +1880,12 @@ export default function App() {
               console.warn('[SPEECH] Swift LEXOIRE_READY timeout');
               listeningRef.current = false;
               setListening(false);
-              if (!speechUnavailableNoticeRef.current) {
-                speechUnavailableNoticeRef.current = true;
-                addMsg('assistant', '[ERROR] Native macOS speech recognition did not become ready. Check Speech Recognition permission in System Settings > Privacy & Security, then relaunch Lexoire.');
-              }
+              void startPreferredSpeechFallback('Native macOS speech recognition did not become ready.');
             }, macNativeOnly ? 20000 : 5000);
             startNativeSpeech().catch((err: unknown) => {
               clearSwiftTimeout();
               listeningRef.current = false;
               setListening(false);
-              if (macNativeOnly) {
-                addMsg('assistant', `[ERROR] Native macOS speech recognition failed to start: ${err instanceof Error ? err.message : String(err)}`);
-                return;
-              }
               void startPreferredSpeechFallback(`Native speech start failed: ${err instanceof Error ? err.message : String(err)}`);
             });
           })
