@@ -138,16 +138,40 @@ function CountdownRing({ pct }: { pct: number }) {
   );
 }
 
-function renderMessageText(text: string) {
+function renderInline(text: string, keyPrefix: string) {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-  return parts.map((part, index) => {
+  return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={index} style={{ fontWeight: 800 }}>{part.slice(2, -2)}</strong>;
+      return <strong key={`${keyPrefix}-${i}`} style={{ fontWeight: 800 }}>{part.slice(2, -2)}</strong>;
     }
     if (part.startsWith('`') && part.endsWith('`')) {
-      return <code key={index} style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 4, padding: '1px 4px' }}>{part.slice(1, -1)}</code>;
+      return <code key={`${keyPrefix}-${i}`} style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 4, padding: '1px 4px' }}>{part.slice(1, -1)}</code>;
     }
     return part;
+  });
+}
+
+function renderMessageText(text: string) {
+  const lines = text.split('\n');
+  return lines.map((line, index) => {
+    const h3 = line.match(/^###\s+(.*)/);
+    if (h3) {
+      return <div key={index} style={{ fontWeight: 800, fontSize: '0.95em', marginTop: 10, marginBottom: 2, opacity: 0.95 }}>{renderInline(h3[1], `${index}`)}</div>;
+    }
+    const h2 = line.match(/^##\s+(.*)/);
+    if (h2) {
+      return <div key={index} style={{ fontWeight: 800, fontSize: '1.05em', marginTop: 12, marginBottom: 2 }}>{renderInline(h2[1], `${index}`)}</div>;
+    }
+    const h1 = line.match(/^#\s+(.*)/);
+    if (h1) {
+      return <div key={index} style={{ fontWeight: 800, fontSize: '1.15em', marginTop: 14, marginBottom: 4 }}>{renderInline(h1[1], `${index}`)}</div>;
+    }
+    return (
+      <span key={index}>
+        {index > 0 && '\n'}
+        {renderInline(line, `${index}`)}
+      </span>
+    );
   });
 }
 
@@ -260,6 +284,8 @@ export default function App() {
   const selectedVoiceNameRef = useRef('');
   const [speechRate, setSpeechRate] = useState(0.92);
   const speechRateRef = useRef(0.92);
+  const [speechVolume, setSpeechVolume] = useState(1.0);
+  const speechVolumeRef = useRef(1.0);
 
   const socketRef = useRef<any>(null);
   const busyRef = useRef(false);
@@ -483,6 +509,7 @@ export default function App() {
   useEffect(() => { selectedVoiceIdRef.current = selectedVoiceId; }, [selectedVoiceId]);
   useEffect(() => { selectedVoiceNameRef.current = selectedVoiceName; }, [selectedVoiceName]);
   useEffect(() => { speechRateRef.current = speechRate; }, [speechRate]);
+  useEffect(() => { speechVolumeRef.current = speechVolume; }, [speechVolume]);
 
   const setActiveStreamingMessage = (id: number | null) => {
     activeStreamMsgIdRef.current = id;
@@ -1062,7 +1089,8 @@ export default function App() {
       } else if (ev.type === 'interim' && ev.text) {
         const txt = ev.text.trim();
         if (!txt) return;
-        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
+        if (speechActiveRef.current) {
+          // Audio is actively playing — skip interim to avoid echo
           return;
         }
         // Post-TTS echo guard: suppress interim echo from the app's own voice
@@ -1080,8 +1108,13 @@ export default function App() {
           console.log('[SPEECH] Final text empty, still triggering timer');
           return;
         }
-        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
+        if (speechActiveRef.current) {
+          // Audio is actively playing — discard to avoid echo
           return;
+        }
+        // If speech is queued but not yet playing, interrupt it so user can speak
+        if (speechQueueRef.current.length > 0) {
+          interruptSpeechPlayback(false);
         }
         // Post-TTS echo guard: discard if the mic picked up the app's own voice after it finished speaking
         if (Date.now() < postSpeechEchoGuardRef.current && isLikelySpeechEcho(txt)) {
@@ -1478,9 +1511,14 @@ export default function App() {
       const trimmedInterim = interimText.trim();
 
       if (trimmedFinal) {
-        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
+        if (speechActiveRef.current) {
+          // Audio is actively playing — discard to avoid echo
           browserSpeechFinalRef.current = '';
           return;
+        }
+        // If speech is queued but not yet playing, interrupt it so the user can speak
+        if (speechQueueRef.current.length > 0) {
+          interruptSpeechPlayback(false);
         }
         // Post-TTS echo guard: discard transcript if it looks like the mic picked up the app's own voice
         if (Date.now() < postSpeechEchoGuardRef.current && isLikelySpeechEcho(trimmedFinal)) {
@@ -1494,7 +1532,8 @@ export default function App() {
         setInterim('');
         interimRef.current = '';
       } else if (trimmedInterim) {
-        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
+        if (speechActiveRef.current) {
+          // Audio is actively playing — discard interim to avoid echo
           return;
         }
         // Post-TTS echo guard: suppress interim echo
@@ -1648,8 +1687,13 @@ export default function App() {
         if (!transcript) {
           return;
         }
-        if (speechActiveRef.current || speechQueueRef.current.length > 0) {
+        if (speechActiveRef.current) {
+          // Audio is actively playing — discard transcript to avoid echo
           return;
+        }
+        // If speech is queued but not yet playing, interrupt so user can speak
+        if (speechQueueRef.current.length > 0) {
+          interruptSpeechPlayback(false);
         }
         if (Date.now() < postSpeechEchoGuardRef.current && isLikelySpeechEcho(transcript)) {
           console.log('[SPEECH] Post-TTS echo suppressed (backend):', transcript.slice(0, 40));
@@ -1761,8 +1805,9 @@ export default function App() {
         mutedRef.current
         || micPermissionRef.current === 'denied'
         || speechActiveRef.current
-        || speechQueueRef.current.length > 0
       ) {
+        // Discard recording only when audio is actively playing — queued-but-not-playing
+        // speech is not the same as speaking; allow mic to capture during that window.
         finalizeSegment(true);
         return;
       }
@@ -1947,7 +1992,6 @@ export default function App() {
         !mutedRef.current
         && micPermissionRef.current !== 'denied'
         && !speechActiveRef.current
-        && speechQueueRef.current.length === 0
         && !listeningRef.current
         && !browserRecognitionRef.current
       ) {
@@ -2551,7 +2595,7 @@ export default function App() {
       const utterance = new SpeechSynthesisUtterance(next);
       utterance.rate = speechRateRef.current;
       utterance.pitch = voiceModeRef.current === 'classic' ? 0.72 : 0.98;
-      utterance.volume = 1;
+      utterance.volume = speechVolumeRef.current;
 
       const cachedAutoVoice = !selectedVoice
         ? matchBrowserVoice(voices, autoSelectedBrowserVoiceNameRef.current[mode])
@@ -2930,6 +2974,23 @@ export default function App() {
                 />
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: '#ffffff25', marginTop: 2 }}>
                   <span>0.4x slow</span><span>1.0x normal</span><span>1.6x fast</span>
+                </div>
+              </div>
+
+              {/* Volume control */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <div style={{ fontSize: 9, letterSpacing: 1.5, color: '#ffffff40', textTransform: 'uppercase' }}>Volume</div>
+                  <div style={{ fontSize: 9, color: '#ffd060' }}>{Math.round(speechVolume * 100)}%</div>
+                </div>
+                <input
+                  type="range" min="0" max="1" step="0.05"
+                  value={speechVolume}
+                  onChange={e => { const v = parseFloat(e.target.value); setSpeechVolume(v); speechVolumeRef.current = v; }}
+                  style={{ width: '100%', accentColor: '#ffcc32', cursor: 'pointer' }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: '#ffffff25', marginTop: 2 }}>
+                  <span>0% mute</span><span>50%</span><span>100% full</span>
                 </div>
               </div>
 
