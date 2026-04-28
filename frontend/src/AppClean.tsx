@@ -155,6 +155,9 @@ function renderMessageText(text: string) {
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
   let pendingText: string[] = [];
+  let inCodeBlock = false;
+  let codeLines: string[] = [];
+  let codeLang = '';
 
   const flushText = () => {
     if (!pendingText.length) return;
@@ -166,7 +169,56 @@ function renderMessageText(text: string) {
     pendingText = [];
   };
 
+  const flushCode = () => {
+    if (!codeLines.length && !codeLang) return;
+    const key = `cb${elements.length}`;
+    elements.push(
+      <div key={key} style={{ marginTop: 8, marginBottom: 8 }}>
+        {codeLang && (
+          <div style={{ fontSize: '0.72em', letterSpacing: '0.1em', opacity: 0.5, textTransform: 'uppercase', marginBottom: 2 }}>
+            {codeLang}
+          </div>
+        )}
+        <pre style={{
+          margin: 0,
+          padding: '10px 12px',
+          background: 'rgba(0,0,0,0.45)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          borderLeft: '2px solid rgba(255,255,255,0.25)',
+          borderRadius: 6,
+          fontSize: '0.9em',
+          lineHeight: 1.55,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all',
+          overflowX: 'auto',
+          fontFamily: 'inherit',
+        }}>
+          {codeLines.join('\n')}
+        </pre>
+      </div>
+    );
+    codeLines = [];
+    codeLang = '';
+  };
+
   lines.forEach((line, i) => {
+    if (line.startsWith('```')) {
+      if (inCodeBlock) {
+        flushCode();
+        inCodeBlock = false;
+      } else {
+        flushText();
+        inCodeBlock = true;
+        codeLang = line.slice(3).trim();
+      }
+      return;
+    }
+
+    if (inCodeBlock) {
+      codeLines.push(line);
+      return;
+    }
+
     const h3 = line.match(/^###\s+(.*)/);
     const h2 = line.match(/^##\s+(.*)/);
     const h1 = line.match(/^#\s+(.*)/);
@@ -201,6 +253,8 @@ function renderMessageText(text: string) {
     }
   });
 
+  // Flush anything remaining (handles unclosed code blocks gracefully)
+  if (inCodeBlock) flushCode();
   flushText();
   return elements;
 }
