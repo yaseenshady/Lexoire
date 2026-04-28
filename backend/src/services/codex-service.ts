@@ -1,7 +1,19 @@
 import { spawn, type ChildProcess } from 'child_process';
+import os from 'os';
+import { getCommandLookupEnv, resolveCommandBinary } from '../utils/command-resolution';
 
-const CODEX_CLI = process.env.CODEX_COMMAND?.trim() ||
-  '/Users/yshady/.npm-global/bin/codex';
+const HOME = os.homedir();
+
+function resolveCodexBinary(): string {
+  return resolveCommandBinary([
+    process.env.CODEX_COMMAND?.trim(),
+    process.platform !== 'win32' ? `${HOME}/.npm-global/bin/codex` : undefined,
+    process.platform !== 'win32' ? `${HOME}/.local/bin/codex` : undefined,
+    'codex',
+  ], 'codex');
+}
+
+const CODEX_CLI = resolveCodexBinary();
 
 type Message = { role: 'user' | 'assistant'; content: string };
 type PromptResult = { text: string; aborted?: boolean };
@@ -112,10 +124,7 @@ class CodexService {
 
       this.currentProcess = spawn(CODEX_CLI, args, {
         cwd: process.cwd(),
-        env: {
-          ...process.env,
-          PATH: `${process.env.PATH}:/Users/yshady/.npm-global/bin`,
-        },
+        env: getCommandLookupEnv(),
       });
 
       let full = '';

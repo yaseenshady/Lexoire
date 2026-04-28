@@ -2,21 +2,15 @@ import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import type { CopilotCommand, CopilotResponse } from '../types';
+import { getCommandLookupEnv, resolveCommandBinary } from '../utils/command-resolution';
 
 function resolveCopilotBinary(): string {
-  const candidates = [
+  return resolveCommandBinary([
     process.env.COPILOT_COMMAND?.trim(),
-    '/opt/homebrew/bin/copilot',
-    '/usr/local/bin/copilot',
+    process.platform === 'darwin' ? '/opt/homebrew/bin/copilot' : undefined,
+    process.platform !== 'win32' ? '/usr/local/bin/copilot' : undefined,
     'copilot',
-  ].filter(Boolean) as string[];
-
-  for (const bin of candidates) {
-    if (bin.startsWith('/') && existsSync(bin)) return bin;
-    const res = spawnSync('which', [bin], { encoding: 'utf8' });
-    if (!res.error && res.status === 0 && res.stdout.trim()) return res.stdout.trim();
-  }
-  return candidates[candidates.length - 1];
+  ], 'copilot');
 }
 
 const SESSION_FILE = resolve(process.cwd(), '.github', 'LEXOIRE_SESSION.md');
@@ -91,7 +85,7 @@ class CopilotService {
   getRuntimeStatus(): CopilotRuntimeStatus {
     const result = spawnSync(this.commandBinary, ['--version'], {
       encoding: 'utf8',
-      env: { ...process.env },
+      env: getCommandLookupEnv(),
     });
     return {
       command: this.commandBinary,
@@ -132,7 +126,7 @@ class CopilotService {
 
       this.currentProcess = spawn(this.commandBinary, args, {
         cwd: workingDirectory,
-        env: { ...process.env },
+        env: getCommandLookupEnv(),
       });
       console.log(`[CopilotService] Process spawned with PID ${this.currentProcess.pid}`);
 

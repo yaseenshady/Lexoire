@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, session, systemPreferences, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, session, systemPreferences, ipcMain, shell: electronShell } = require('electron');
 const { existsSync } = require('fs');
 const path = require('path');
 const http = require('http');
@@ -90,6 +90,25 @@ function waitForBackend(port, maxWaitMs = 15000) {
 }
 
 function listListeningPids(port) {
+  if (process.platform === 'win32') {
+    try {
+      const output = execFileSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8' });
+      const pidMatches = output
+        .split(/\r?\n/)
+        .map((line) => {
+          const match = line.match(new RegExp(`^\\s*TCP\\s+\\S+:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'i'));
+          return match ? Number.parseInt(match[1], 10) : NaN;
+        })
+        .filter((value) => Number.isInteger(value));
+      return [...new Set(pidMatches)];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  if (!commandExists('lsof')) {
+    return [];
+  }
   try {
     const output = execFileSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' });
     return output
@@ -102,8 +121,53 @@ function listListeningPids(port) {
 }
 
 function getProcessCommand(pid) {
+  if (process.platform === 'win32') {
+    return runPowerShell(`$process = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object -First 1; if ($process) { $process.CommandLine }`);
+  }
+
+  if (!commandExists('ps')) {
+    return '';
+  }
   try {
     return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim();
+  } catch (_) {
+    return '';
+  }
+}
+
+function waitMs(durationMs) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, durationMs);
+  } catch (_) {}
+}
+
+function runPowerShell(script) {
+  if (process.platform !== 'win32') {
+    return '';
+  }
+
+  const shell = commandExists('powershell.exe')
+    ? 'powershell.exe'
+    : (commandExists('pwsh.exe') ? 'pwsh.exe' : null);
+  if (!shell) {
+    return '';
+  }
+
+  try {
+    const result = spawnSync(shell, [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      script,
+    ], {
+      encoding: 'utf8',
+      env: { ...process.env },
+    });
+    if (result.error || result.status !== 0) {
+      return '';
+    }
+    return result.stdout.trim();
   } catch (_) {
     return '';
   }
@@ -127,11 +191,15 @@ function cleanupStaleBackend(port) {
   }
 
   if (pids.length > 0) {
-    spawnSync('sleep', ['1']);
+    waitMs(1000);
   }
 }
 
 function listManagedSpeechProcesses() {
+  if (process.platform !== 'darwin' || !commandExists('ps')) {
+    return [];
+  }
+
   try {
     const output = execFileSync('ps', ['-ax', '-o', 'pid=,command='], { encoding: 'utf8' });
     return output
@@ -168,7 +236,7 @@ function cleanupStaleSpeechProcesses(exceptPid) {
   }
 
   if (stoppedAny) {
-    spawnSync('sleep', ['1']);
+    waitMs(1000);
   }
 }
 
@@ -314,7 +382,7 @@ const DEFAULT_HIFI_TTS_RATE = 168;
 const DEFAULT_CLASSIC_TTS_RATE = 150;
 
 function commandExists(command) {
-  const locator = process.platform === 'win32' ? 'where' : 'which';
+  const locator = process.platform === 'win32' ? 'where.exe' : 'which';
   const result = spawnSync(locator, [command], {
     stdio: 'ignore',
     env: { ...process.env },
@@ -418,21 +486,81 @@ function getVoiceCapabilities() {
   };
 }
 
-function pickVoice(mode = 'hifi') {
+function listDarwinVoices() {
   if (process.platform !== 'darwin') return null;
+  try {
+    return execFileSync('say', ['-v', '?'], { encoding: 'utf8' })
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.split(/\s{2,}/)[0]?.trim())
+      .filter(Boolean);
+  } catch (_) {
+    return null;
+  }
+}
+
+const darwinAutoVoiceCache = {
+  hifi: null,
+  classic: null,
+};
+
+function findDarwinVoice(installedVoices, requestedVoice) {
+  const normalizedRequestedVoice = typeof requestedVoice === 'string' ? requestedVoice.trim().toLowerCase() : '';
+  if (!normalizedRequestedVoice) {
+    return null;
+  }
+
+  return installedVoices.find((voice) => voice.toLowerCase() === normalizedRequestedVoice)
+    || installedVoices.find((voice) => voice.toLowerCase().includes(normalizedRequestedVoice) || normalizedRequestedVoice.includes(voice.toLowerCase()))
+    || null;
+}
+
+function pickVoice(mode = 'hifi', preferredVoiceName) {
+  const explicitVoice = typeof preferredVoiceName === 'string' ? preferredVoiceName.trim() : '';
+  if (process.platform !== 'darwin') {
+    return null;
+  }
+
   const envVoice = process.env.LEXOIRE_VOICE?.trim();
   const preferred = envVoice
     ? [envVoice]
     : mode === 'classic'
       ? ['Fred', 'Ralph', 'Albert']
       : ['Eddy (English (US))', 'Reed (English (US))', 'Flo (English (US))', 'Samantha', 'Ava', 'Allison'];
-  try {
-    const installed = execFileSync('say', ['-v', '?'], { encoding: 'utf8' });
-    for (const name of preferred) {
-      if (installed.includes(`${name} `)) return name;
+
+  const installed = listDarwinVoices();
+  if (explicitVoice) {
+    if (!installed) {
+      return explicitVoice;
     }
-  } catch (_) {}
-  return mode === 'classic' ? 'Fred' : 'Eddy (English (US))';
+    return findDarwinVoice(installed, explicitVoice);
+  }
+
+  if (installed) {
+    const cachedVoice = darwinAutoVoiceCache[mode];
+    const matchedCachedVoice = cachedVoice ? findDarwinVoice(installed, cachedVoice) : null;
+    if (matchedCachedVoice) {
+      return matchedCachedVoice;
+    }
+
+    for (const name of preferred) {
+      const matchedVoice = findDarwinVoice(installed, name);
+      if (matchedVoice) {
+        darwinAutoVoiceCache[mode] = matchedVoice;
+        return matchedVoice;
+      }
+    }
+
+    if (installed[0]) {
+      darwinAutoVoiceCache[mode] = installed[0];
+      return installed[0];
+    }
+  }
+
+  const fallbackVoice = mode === 'classic' ? 'Fred' : 'Eddy (English (US))';
+  darwinAutoVoiceCache[mode] = fallbackVoice;
+  return fallbackVoice;
 }
 
 function speakNextQueuedUtterance() {
@@ -447,8 +575,9 @@ function speakNextQueuedUtterance() {
   stoppingSpeech = false;
   const rate = next.mode === 'classic' ? DEFAULT_CLASSIC_TTS_RATE : DEFAULT_HIFI_TTS_RATE;
   const runtime = resolveTtsRuntime();
-  const voice = pickVoice(next.mode);
-  if (!runtime || (process.platform === 'darwin' && !voice)) {
+  const voice = pickVoice(next.mode, next.voiceName);
+  const requiresVoiceSelection = process.platform === 'darwin' || Boolean(next.voiceName);
+  if (!runtime || (requiresVoiceSelection && !voice)) {
     activeUtterance = null;
     next.resolve(false);
     speakNextQueuedUtterance();
@@ -493,10 +622,13 @@ function speakNextQueuedUtterance() {
 ipcMain.handle('tts:speak', async (_, payload) => {
   const text = typeof payload === 'object' && payload !== null ? payload.text : payload;
   const mode = typeof payload === 'object' && payload !== null && payload.mode === 'classic' ? 'classic' : 'hifi';
+  const voiceName = typeof payload === 'object' && payload !== null && typeof payload.voiceName === 'string'
+    ? payload.voiceName.trim()
+    : '';
   const clean = String(text).replace(/["`$\\]/g, ' ').trim().substring(0, 400);
   if (!clean) return false;
   return new Promise((resolve, reject) => {
-    sayQueue.push({ text: clean, mode, resolve, reject });
+    sayQueue.push({ text: clean, mode, voiceName, resolve, reject });
     if (!sayProcess && !activeUtterance) speakNextQueuedUtterance();
   });
 });
@@ -507,7 +639,27 @@ ipcMain.handle('tts:stop', async () => {
 
 ipcMain.handle('mic:request', async () => {
   if (process.platform !== 'darwin') return true;
+  if (systemPreferences.getMediaAccessStatus('microphone') === 'granted') return true;
   return systemPreferences.askForMediaAccess('microphone');
+});
+
+ipcMain.handle('mic:status', async () => {
+  if (process.platform !== 'darwin') return 'granted';
+  return systemPreferences.getMediaAccessStatus('microphone');
+});
+
+ipcMain.handle('mic:open-settings', async () => {
+  if (process.platform === 'darwin') {
+    await electronShell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone');
+    return true;
+  }
+
+  if (process.platform === 'win32') {
+    await electronShell.openExternal('ms-settings:privacy-microphone');
+    return true;
+  }
+
+  return false;
 });
 
 ipcMain.handle('voice:capabilities', async () => getVoiceCapabilities());
@@ -557,12 +709,12 @@ function startSpeechProcess() {
       if (t === 'LEXOIRE_READY') {
         mainWindow?.webContents.send('speech:event', { type: 'ready' });
       } else if (t.startsWith('LEXOIRE_INTERIM:')) {
-        mainWindow?.webContents.send('speech:event', { type: 'interim', text: t.slice(17) });
+        mainWindow?.webContents.send('speech:event', { type: 'interim', text: t.slice(16) });
       } else if (t.startsWith('LEXOIRE_FINAL:')) {
-        mainWindow?.webContents.send('speech:event', { type: 'final', text: t.slice(15) });
+        mainWindow?.webContents.send('speech:event', { type: 'final', text: t.slice(14) });
       } else if (t.startsWith('LEXOIRE_ERROR:')) {
-        const errorText = t.slice(15);
-        if (/denied|notDetermined|restricted|permission|privacy/i.test(errorText)) {
+        const errorText = t.slice(14);
+        if (/denied|notDetermined|restricted|permission|privacy|siri|dictation|disabled/i.test(errorText)) {
           speechEnabled = false;
         }
         mainWindow?.webContents.send('speech:event', { type: 'error', text: errorText });

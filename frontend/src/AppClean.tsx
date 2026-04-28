@@ -15,6 +15,7 @@ type VoiceBackendCapabilities = {
   backendSpeechRecognition: boolean;
   transcriptionModels?: string[];
 };
+type NativeMicStatus = 'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown';
 interface Msg { id: number; role: 'user' | 'assistant'; text: string; agent?: Agent; createdAt: number; }
 interface SavedConversationMessage {
   id: string;
@@ -80,11 +81,13 @@ const AUDIO_INPUT_CONSTRAINTS: MediaStreamConstraints = {
     channelCount: 1,
   },
 };
-const SERVER_SPEECH_START_LEVEL = 0.05;
-const SERVER_SPEECH_CONTINUE_LEVEL = 0.028;
+const SERVER_SPEECH_START_LEVEL = 0.035;
+const SERVER_SPEECH_CONTINUE_LEVEL = 0.02;
 const SERVER_SPEECH_SEGMENT_SILENCE_MS = 850;
 const SERVER_SPEECH_MIN_RECORDING_MS = 350;
 const SERVER_SPEECH_MAX_RECORDING_MS = 15000;
+const SERVER_SPEECH_MONITOR_INTERVAL_MS = 45;
+const SERVER_SPEECH_EARLY_START_VELOCITY = 0.012;
 
 const ECHO_FILLER_WORDS = new Set([
   'a', 'an', 'and', 'are', 'be', 'for', 'from', 'get', 'got', 'had', 'has', 'have',
@@ -179,6 +182,39 @@ const AGENT_COLORS: Record<Agent, { border: string; bg: string; text: string; la
   codex:   { border: '#4fa3ffaa', bg: 'linear-gradient(135deg, #001230 0%, #000c20 100%)', text: '#80c8ff', label: 'CODEX'   },
 };
 
+function getBrowserVoiceId(voice: Pick<SpeechSynthesisVoice, 'voiceURI' | 'name' | 'lang'>) {
+  return voice.voiceURI || `${voice.name}::${voice.lang}`;
+}
+
+function matchBrowserVoice(voices: SpeechSynthesisVoice[], voiceName?: string, voiceId?: string) {
+  if (voiceId?.trim()) {
+    const exactVoice = voices.find((voice) => getBrowserVoiceId(voice) === voiceId.trim());
+    if (exactVoice) {
+      return exactVoice;
+    }
+  }
+
+  const normalizedVoiceName = voiceName?.trim().toLowerCase();
+  if (!normalizedVoiceName) {
+    return undefined;
+  }
+
+  return voices.find((voice) => voice.name.toLowerCase() === normalizedVoiceName)
+    || voices.find((voice) => voice.name.toLowerCase().includes(normalizedVoiceName) || normalizedVoiceName.includes(voice.name.toLowerCase()));
+}
+
+function getPreferredBrowserVoiceNames(mode: VoiceMode, platform?: string) {
+  if (platform === 'darwin') {
+    return mode === 'classic'
+      ? ['Fred', 'Ralph', 'Albert', 'Samantha']
+      : ['Eddy', 'Reed', 'Flo', 'Samantha', 'Ava', 'Allison'];
+  }
+
+  return mode === 'classic'
+    ? ['Fred', 'Ralph', 'Albert', 'Microsoft David', 'Microsoft Mark']
+    : ['Microsoft Aria', 'Microsoft Jenny', 'Google US English', 'Google UK English Female', 'Samantha', 'Eddy', 'Reed', 'Flo', 'Ava', 'Allison'];
+}
+
 export default function App() {
   const [agent, setAgent] = useState<Agent>('copilot');
   const agentRef = useRef<Agent>('copilot');
@@ -218,7 +254,9 @@ export default function App() {
   const [warnDismissed, setWarnDismissed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceId, setSelectedVoiceId] = useState('');
   const [selectedVoiceName, setSelectedVoiceName] = useState('');
+  const selectedVoiceIdRef = useRef('');
   const selectedVoiceNameRef = useRef('');
   const [speechRate, setSpeechRate] = useState(0.92);
   const speechRateRef = useRef(0.92);
@@ -229,6 +267,7 @@ export default function App() {
   const mutedRef = useRef(false);
   const voiceRepliesRef = useRef(true);
   const voiceModeRef = useRef<VoiceMode>('hifi');
+  const autoSelectedBrowserVoiceNameRef = useRef<Record<VoiceMode, string | undefined>>({ hifi: undefined, classic: undefined });
   const micPermissionRef = useRef<'unknown' | 'granted' | 'denied'>('unknown');
   const micPermissionNoticeRef = useRef(false);
   const speechUnavailableNoticeRef = useRef(false);
@@ -429,8 +468,18 @@ export default function App() {
     if (activeRecorder && activeRecorder.state !== 'inactive') {
       try { activeRecorder.stop(); } catch {}
     }
+    if (microphone.current) {
+      try { microphone.current.disconnect(); } catch {}
+      microphone.current = null;
+    }
+    if (analyzerRef.current) {
+      try { analyzerRef.current.disconnect(); } catch {}
+      analyzerRef.current = null;
+    }
     microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
+    microphoneStreamRef.current = null;
   }, []);
+  useEffect(() => { selectedVoiceIdRef.current = selectedVoiceId; }, [selectedVoiceId]);
   useEffect(() => { selectedVoiceNameRef.current = selectedVoiceName; }, [selectedVoiceName]);
   useEffect(() => { speechRateRef.current = speechRate; }, [speechRate]);
 
@@ -507,8 +556,27 @@ export default function App() {
   }, []);
 
   // ── Initialize Audio Context on First Speech Event ───────────────────────
+  const releaseMicrophoneCapture = () => {
+    if (microphone.current) {
+      try { microphone.current.disconnect(); } catch {}
+      microphone.current = null;
+    }
+    if (analyzerRef.current) {
+      try { analyzerRef.current.disconnect(); } catch {}
+      analyzerRef.current = null;
+    }
+    microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
+    microphoneStreamRef.current = null;
+    lastFrequenciesRef.current = null;
+    audioLevelHistoryRef.current = [];
+    audioLevelRef.current = 0;
+    speechVelocityRef.current = 0;
+    setAudioLevel(0);
+    setAudioFrequencies(undefined);
+  };
+
   const initAudioContext = async () => {
-    if (audioContextRef.current && analyzerRef.current && microphone.current) return;
+    if (audioContextRef.current && analyzerRef.current && microphone.current && microphoneStreamRef.current?.active) return;
     try {
       const stream = microphoneStreamRef.current ?? await navigator.mediaDevices.getUserMedia(AUDIO_INPUT_CONSTRAINTS);
       microphoneStreamRef.current = stream;
@@ -519,6 +587,12 @@ export default function App() {
       if (ctx.state === 'suspended') {
         await ctx.resume();
       }
+      if (microphone.current) {
+        try { microphone.current.disconnect(); } catch {}
+      }
+      if (analyzerRef.current) {
+        try { analyzerRef.current.disconnect(); } catch {}
+      }
       microphone.current = ctx.createMediaStreamSource(stream);
       const analyzer = ctx.createAnalyser();
       analyzer.fftSize = 256;
@@ -528,8 +602,10 @@ export default function App() {
       console.error('Audio context init failed:', err);
       const errorName = err instanceof DOMException ? err.name : '';
       if (errorName === 'NotAllowedError' || errorName === 'SecurityError') {
-        micPermissionRef.current = 'denied';
-        setMicPermission('denied');
+        const status = await syncNativeMicStatus();
+        if (status !== 'denied' && status !== 'restricted') {
+          return;
+        }
         listeningRef.current = false;
         setListening(false);
         clearListeningRestartTimer();
@@ -698,6 +774,31 @@ export default function App() {
     }
 
     return backendSpeechCapabilitiesPromiseRef.current;
+  };
+
+  const syncNativeMicStatus = async () => {
+    try {
+      const status = await window.lexoire?.getMicStatus?.();
+      if (status === 'granted') {
+        micPermissionRef.current = 'granted';
+        setMicPermission('granted');
+        micPermissionNoticeRef.current = false;
+        return status;
+      }
+      if (status === 'denied' || status === 'restricted') {
+        micPermissionRef.current = 'denied';
+        setMicPermission('denied');
+        return status;
+      }
+      if (status === 'not-determined') {
+        micPermissionRef.current = 'unknown';
+        setMicPermission('unknown');
+        return status;
+      }
+      return status || 'unknown';
+    } catch {
+      return 'unknown';
+    }
   };
 
   // ── Socket ───────────────────────────────────────────────────────────────
@@ -955,6 +1056,7 @@ export default function App() {
         clearSwiftTimeout();
         listeningRef.current = true;
         setListening(true);
+        releaseMicrophoneCapture();
         initAudioContext();
       } else if (ev.type === 'interim' && ev.text) {
         const txt = ev.text.trim();
@@ -998,16 +1100,24 @@ export default function App() {
         clearSwiftTimeout();
         console.error('[SPEECH] Error:', ev.text);
         const errorText = ev.text || 'Speech recognition failed';
-        const permissionDenied = /denied|notdetermined|restricted|permission|privacy/i.test(errorText);
+        const permissionDenied = /denied|notdetermined|restricted|permission|privacy|siri|dictation|disabled/i.test(errorText);
         if (permissionDenied) {
-          micPermissionRef.current = 'denied';
-          setMicPermission('denied');
+          const siriProblem = /siri|dictation|disabled/i.test(errorText);
+          const micProblem = /microphone|mic|media access/i.test(errorText);
+          if (micProblem && !siriProblem) {
+            void syncNativeMicStatus();
+          }
           listeningRef.current = false;
           setListening(false);
           clearListeningRestartTimer();
           if (!micPermissionNoticeRef.current) {
             micPermissionNoticeRef.current = true;
-            addMsg('assistant', '[ERROR] Microphone or Speech Recognition permission is blocked. Enable both in System Settings > Privacy & Security, then restart Lexoire.');
+            addMsg(
+              'assistant',
+              siriProblem
+                ? '[ERROR] macOS speech recognition requires Siri & Dictation to be enabled. Go to System Settings → Siri & Spotlight → enable Siri, then System Settings → Keyboard → Dictation → turn Dictation on. Restart Lexoire after.'
+                : '[ERROR] Microphone or Speech Recognition permission is blocked. Enable both in System Settings > Privacy & Security, then restart Lexoire.',
+            );
           }
           return;
         }
@@ -1326,6 +1436,7 @@ export default function App() {
     lexoire?.stopSpeechRecognition?.();
     listeningRef.current = false;
     setListening(false);
+    releaseMicrophoneCapture();
   };
 
   const startBrowserSpeech = () => {
@@ -1399,6 +1510,7 @@ export default function App() {
       }
       listeningRef.current = false;
       setListening(false);
+      releaseMicrophoneCapture();
       if (/not-allowed|service-not-allowed|permission|denied/i.test(error)) {
         micPermissionRef.current = 'denied';
         setMicPermission('denied');
@@ -1418,6 +1530,7 @@ export default function App() {
       }
       listeningRef.current = false;
       setListening(false);
+      releaseMicrophoneCapture();
       if (shouldResume && !mutedRef.current && micPermissionRef.current !== 'denied') {
         scheduleListeningResume(300);
       }
@@ -1643,7 +1756,6 @@ export default function App() {
       if (
         mutedRef.current
         || micPermissionRef.current === 'denied'
-        || busyRef.current
         || speechActiveRef.current
         || speechQueueRef.current.length > 0
       ) {
@@ -1655,7 +1767,9 @@ export default function App() {
       const recorder = serverSpeechRecorderRef.current;
 
       if (!recorder || recorder.state !== 'recording') {
-        if (level >= SERVER_SPEECH_START_LEVEL) {
+        const shouldStartSegment = level >= SERVER_SPEECH_START_LEVEL
+          || (level >= SERVER_SPEECH_CONTINUE_LEVEL && speechVelocityRef.current >= SERVER_SPEECH_EARLY_START_VELOCITY);
+        if (shouldStartSegment) {
           startSegment();
         }
         return;
@@ -1684,7 +1798,7 @@ export default function App() {
       ) {
         finalizeSegment(false);
       }
-    }, 90);
+    }, SERVER_SPEECH_MONITOR_INTERVAL_MS);
   };
 
   const startPreferredSpeechFallback = async (reason?: string) => {
@@ -1704,7 +1818,6 @@ export default function App() {
   const startListening = () => {
     if (
       mutedRef.current
-      || micPermissionRef.current === 'denied'
       || listeningRef.current
       || browserRecognitionRef.current
       || serverSpeechModeRef.current
@@ -1734,16 +1847,31 @@ export default function App() {
           return startPreferredSpeechFallback('Native speech recognition unavailable.');
         }
 
-        return lexoire.requestMic?.()
-          .then((allowed: boolean) => {
-            if (!allowed) {
+        return syncNativeMicStatus()
+          .then(() => lexoire.requestMic?.())
+          .then(async (allowed: boolean | undefined) => {
+            const status = await syncNativeMicStatus();
+            const hasMicAccess = allowed || status === 'granted';
+            if (!hasMicAccess && (status === 'denied' || status === 'restricted')) {
               micPermissionRef.current = 'denied';
               setMicPermission('denied');
               setListening(false);
               clearListeningRestartTimer();
               if (!micPermissionNoticeRef.current) {
                 micPermissionNoticeRef.current = true;
-                addMsg('assistant', '[ERROR] Microphone permission is blocked. Enable Microphone and Speech Recognition in System Settings > Privacy & Security, then restart Lexoire.');
+                addMsg('assistant', '[ERROR] Microphone permission is blocked. Enable Microphone in System Settings > Privacy & Security, then restart Lexoire.');
+              }
+              return;
+            }
+
+            if (!allowed) {
+              micPermissionRef.current = 'unknown';
+              setMicPermission('unknown');
+              setListening(false);
+              clearListeningRestartTimer();
+              if (!micPermissionNoticeRef.current) {
+                micPermissionNoticeRef.current = true;
+                addMsg('assistant', '[ERROR] Microphone access was not granted yet. Click MIC again or enable Microphone in System Settings > Privacy & Security.');
               }
               return;
             }
@@ -1778,22 +1906,34 @@ export default function App() {
             });
           })
           .catch((err: unknown) => {
-            micPermissionRef.current = 'denied';
-            setMicPermission('denied');
-            listeningRef.current = false;
-            setListening(false);
-            clearListeningRestartTimer();
-            if (!micPermissionNoticeRef.current) {
-              micPermissionNoticeRef.current = true;
-              addMsg('assistant', `[ERROR] Unable to request microphone permission: ${err instanceof Error ? err.message : String(err)}`);
-            }
+            void syncNativeMicStatus().then((status) => {
+              listeningRef.current = false;
+              setListening(false);
+              clearListeningRestartTimer();
+              if (status === 'denied' || status === 'restricted') {
+                if (!micPermissionNoticeRef.current) {
+                  micPermissionNoticeRef.current = true;
+                  addMsg('assistant', `[ERROR] Unable to request microphone permission: ${err instanceof Error ? err.message : String(err)}`);
+                }
+              } else {
+                scheduleListeningResume(300);
+              }
+            });
           });
       });
   };
 
   const scheduleListeningResume = (delay = 220) => {
     clearListeningRestartTimer();
-    if (mutedRef.current || micPermissionRef.current === 'denied') return;
+    if (mutedRef.current) return;
+    if (micPermissionRef.current === 'denied') {
+      void syncNativeMicStatus().then((status) => {
+        if (!mutedRef.current && status !== 'denied' && status !== 'restricted') {
+          scheduleListeningResume(delay);
+        }
+      });
+      return;
+    }
     // Don't start mic before the echo guard expires — prevents speaker pickup
     const guardRemaining = Math.max(0, postSpeechEchoGuardRef.current - Date.now());
     const actualDelay = guardRemaining > 0 ? Math.max(delay, guardRemaining + 150) : delay;
@@ -2161,6 +2301,18 @@ export default function App() {
     scheduleListeningResume(80);
   };
 
+  const interruptAssistantOutput = () => {
+    const interruptedActiveResponse = confirmAbortActiveResponse();
+    if (!interruptedActiveResponse) {
+      stopCurrentSpeech();
+      return;
+    }
+    resetSpokenTextMemory();
+    setInterim('');
+    interimRef.current = '';
+    scheduleListeningResume(80);
+  };
+
   const handleLocalControlCommand = (cmd: string) => {
     const normalized = cmd
       .toLowerCase()
@@ -2311,6 +2463,17 @@ export default function App() {
   };
 
   const toggleMute = () => {
+    if (micPermissionRef.current === 'denied') {
+      micPermissionNoticeRef.current = false;
+      micPermissionRef.current = 'unknown';
+      setMicPermission('unknown');
+      setMuted(false);
+      mutedRef.current = false;
+      void window.lexoire?.openMicSettings?.();
+      scheduleListeningResume(300);
+      return;
+    }
+
     const next = !mutedRef.current;
     mutedRef.current = next;
     setMuted(next);
@@ -2365,27 +2528,37 @@ export default function App() {
       scheduleListeningResume(400);
     };
 
-    const speakWithBrowserSpeech = () => {
+    const speakWithBrowserSpeech = (requireExplicitSelection = false) => {
       if (!window.speechSynthesis) {
         return false;
       }
+      const voices = availableVoices.length > 0 ? availableVoices : window.speechSynthesis.getVoices();
+      const mode = voiceModeRef.current;
+      const selectedVoice = matchBrowserVoice(voices, selectedVoiceNameRef.current, selectedVoiceIdRef.current);
+      if (requireExplicitSelection && selectedVoiceNameRef.current.trim() && !selectedVoice) {
+        return false;
+      }
+
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(next);
       utterance.rate = speechRateRef.current;
       utterance.pitch = voiceModeRef.current === 'classic' ? 0.72 : 0.98;
       utterance.volume = 1;
 
-      const voices = window.speechSynthesis.getVoices();
-      // User-selected voice takes priority
-      const selectedVoice = selectedVoiceNameRef.current
-        ? voices.find(v => v.name === selectedVoiceNameRef.current)
+      const cachedAutoVoice = !selectedVoice
+        ? matchBrowserVoice(voices, autoSelectedBrowserVoiceNameRef.current[mode])
         : undefined;
-      const preferredVoiceNames = voiceModeRef.current === 'classic'
-        ? ['Fred', 'Ralph', 'Albert', 'Microsoft David', 'Microsoft Mark']
-        : ['Microsoft Aria', 'Microsoft Jenny', 'Google US English', 'Google UK English Female', 'Samantha', 'Eddy', 'Reed', 'Flo', 'Ava', 'Allison'];
-      const preferredVoice = selectedVoice ?? preferredVoiceNames
-        .map((name) => voices.find((voice) => voice.name.includes(name)))
-        .find(Boolean);
+      const preferredVoice = selectedVoice
+        ?? cachedAutoVoice
+        ?? getPreferredBrowserVoiceNames(mode, window.lexoire?.platform)
+          .map((voiceName) => matchBrowserVoice(voices, voiceName))
+          .find(Boolean)
+        ?? voices.find((voice) => voice.default)
+        ?? voices[0];
+
+      if (!selectedVoice && preferredVoice?.name) {
+        autoSelectedBrowserVoiceNameRef.current[mode] = preferredVoice.name;
+      }
 
       if (preferredVoice) utterance.voice = preferredVoice;
       utterance.onend = finish;
@@ -2394,9 +2567,14 @@ export default function App() {
       return true;
     };
 
+    const selectedVoiceName = selectedVoiceNameRef.current.trim();
+    if (selectedVoiceName && speakWithBrowserSpeech(true)) {
+      return;
+    }
+
     const lexoire = window.lexoire;
     if (lexoire?.speak) {
-      Promise.resolve(lexoire.speak({ text: next, mode: voiceModeRef.current }))
+      Promise.resolve(lexoire.speak({ text: next, mode: voiceModeRef.current, voiceName: selectedVoiceName || undefined }))
         .then((usedNative) => {
           if (usedNative === false && speakWithBrowserSpeech()) {
             return;
@@ -2541,7 +2719,7 @@ export default function App() {
           {(isSpeaking || speechQueueCount > 0) && (
             <button
               onClick={() => {
-                stopCurrentSpeech();
+                interruptAssistantOutput();
               }}
               style={{
                 background: 'linear-gradient(135deg, rgba(255, 150, 80, 0.14), rgba(255, 80, 40, 0.08))',
@@ -2557,7 +2735,7 @@ export default function App() {
                 textTransform: 'uppercase',
               }}
             >
-              Silence
+              Interrupt
             </button>
           )}
           {busy && <span style={{ fontSize: 10, letterSpacing: 2, color: AGENT_COLORS[processingAgent].text, animation: 'pulse 1s infinite', textTransform: 'uppercase' }}>{AGENT_COLORS[processingAgent].label} PROCESSING</span>}
@@ -2567,19 +2745,21 @@ export default function App() {
           
           {/* Mic Button */}
           <button onClick={toggleMute} style={{
-            background: muted 
+            background: micPermission === 'denied'
+              ? 'linear-gradient(135deg, rgba(255, 150, 80, 0.15), rgba(160, 70, 20, 0.08))'
+              : muted
               ? 'linear-gradient(135deg, rgba(255, 68, 68, 0.15), rgba(204, 0, 0, 0.08))'
               : 'linear-gradient(135deg, rgba(16, 255, 80, 0.15), rgba(0, 204, 80, 0.08))',
-            border: `1.5px solid ${muted ? '#ff4444' : '#10ff5060'}`,
-            color: muted ? '#ff4444' : '#10ff50',
+            border: `1.5px solid ${micPermission === 'denied' ? '#ff965055' : muted ? '#ff4444' : '#10ff5060'}`,
+            color: micPermission === 'denied' ? '#ffbf97' : muted ? '#ff4444' : '#10ff50',
             fontFamily: 'inherit', fontSize: 11, fontWeight: 600, letterSpacing: 1,
             padding: '7px 14px', cursor: 'pointer', borderRadius: 6,
             transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
             backdropFilter: 'blur(12px)',
-            boxShadow: muted ? '0 0 16px rgba(255, 68, 68, 0.2)' : '0 0 16px rgba(16, 255, 80, 0.15)',
+            boxShadow: micPermission === 'denied' ? '0 0 16px rgba(255, 150, 80, 0.16)' : muted ? '0 0 16px rgba(255, 68, 68, 0.2)' : '0 0 16px rgba(16, 255, 80, 0.15)',
             textTransform: 'uppercase',
           }}>
-            MIC
+            {micPermission === 'denied' ? 'MIC SETTINGS' : 'MIC'}
           </button>
 
           <button onClick={() => {
@@ -2695,8 +2875,15 @@ export default function App() {
               <div style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 9, letterSpacing: 1.5, color: '#ffffff40', textTransform: 'uppercase', marginBottom: 6 }}>Voice</div>
                 <select
-                  value={selectedVoiceName}
-                  onChange={e => { setSelectedVoiceName(e.target.value); selectedVoiceNameRef.current = e.target.value; }}
+                  value={selectedVoiceId}
+                  onChange={e => {
+                    const nextVoiceId = e.target.value;
+                    const nextVoice = availableVoices.find((voice) => getBrowserVoiceId(voice) === nextVoiceId);
+                    setSelectedVoiceId(nextVoiceId);
+                    selectedVoiceIdRef.current = nextVoiceId;
+                    setSelectedVoiceName(nextVoice?.name || '');
+                    selectedVoiceNameRef.current = nextVoice?.name || '';
+                  }}
                   style={{
                     width: '100%',
                     background: '#0a0d06',
@@ -2710,7 +2897,7 @@ export default function App() {
                   }}>
                   <option value="">Auto (use mode default)</option>
                   {availableVoices.map(v => (
-                    <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
+                    <option key={getBrowserVoiceId(v)} value={getBrowserVoiceId(v)}>{v.name} ({v.lang})</option>
                   ))}
                 </select>
               </div>

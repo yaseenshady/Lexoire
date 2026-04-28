@@ -1,126 +1,112 @@
-# Lexoire
+# LEXOIRE
 
-Lexoire is a local-first desktop workspace for voice-driven GitHub Copilot automation.
+A local-first desktop assistant that lets you control GitHub Copilot, Claude, and Codex by voice or text. Speak a prompt, watch the response stream in, and hear it read back — all running on your machine.
 
-- **Frontend**: React + Vite interface for voice input, queued prompts, streaming responses, and workspace context
-- **Backend**: Express + Socket.IO runtime for Copilot orchestration, persistence, and provider integrations
-- **Desktop shell**: Electron app with native macOS speech recognition, cross-platform system TTS, and a bundled free local Whisper fallback for Windows/Linux
-- **Persistence**: SQLite-backed conversations, memories, and execution-plan state
+## What it does
 
-## Highlights
+- **Voice-first** — speak commands; LEXOIRE transcribes, routes, and responds
+- **Three AI agents** — Copilot (GitHub), Claude (Anthropic), and Codex, each with their own streaming chat panel
+- **Barge-in** — hit the Silence button to stop LEXOIRE mid-sentence and issue a new command
+- **Queued prompts** — chain commands and let them run sequentially while you work
+- **Workspace sessions** — associate prompts with a git repo and objective; context follows each session
+- **Persistent memory** — SQLite-backed conversations, notes, and project plans survive restarts
+- **Local speech** — macOS uses native speech recognition; Windows/Linux fall back to a bundled Whisper model with no paid API required
 
-- Voice and text command entry
-- Streaming assistant responses
-- Multi-provider orchestration for Copilot, Claude, and Codex
-- Local persistence for sessions, memories, and project state
-- Desktop packaging with Electron
+## Stack
+
+| Layer | Technology |
+|---|---|
+| UI | React + Vite |
+| Backend | Express + Socket.IO |
+| Desktop shell | Electron 41 |
+| Native speech (macOS) | Swift helper (`LexoireSpeech`) |
+| Fallback speech | Whisper via `@huggingface/transformers` |
+| Database | SQLite via `better-sqlite3` |
 
 ## Requirements
 
-- **Node.js** 22+
-- **npm** 10+
-- A working **GitHub Copilot CLI** install (`copilot`) authenticated for local use
-- **macOS** for the native packaged desktop speech-recognition path
-- Enough disk space for the bundled/local Whisper speech model used on Windows/Linux
-- A Chromium-based browser for the best browser speech API support in development
+- **Node.js** 22+, **npm** 10+
+- **GitHub Copilot CLI** (`copilot`) — authenticated and working (`copilot --version`)
+- **Claude CLI** (`claude`) — for Claude agent support
+- **Codex CLI** (`codex`) — for Codex agent support
+- macOS for native packaged speech; any platform for dev mode with browser speech APIs
 
 ## Quick start
 
 ```bash
+# 1. Install dependencies
 npm run install:all
+
+# 2. Configure the backend (copy and edit as needed)
+cp backend/.env.example backend/.env
+
+# 3. Start frontend + backend in parallel
 npm run dev
 ```
 
-That starts:
-
 - Frontend: `http://localhost:3000`
-- Backend: `http://localhost:5000`
-
-For a packaged local desktop build:
-
-```bash
-npm run electron:pack:local
-```
-
-## Build and run
-
-Production-style local run:
-
-```bash
-npm run build
-npm start
-```
-
-Electron desktop app in development:
-
-```bash
-npm run electron:dev
-```
+- Backend: `http://localhost:7337`
 
 ## Configuration
 
-Copy and edit the example files if needed:
+`backend/.env` key settings:
 
-- `backend/.env.example`
-- `frontend/.env.example`
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `7337` | Backend HTTP port |
+| `DB_PATH` | `./lexoire.db` | SQLite database location |
+| `FRONTEND_ORIGIN` | `http://localhost:3000` | CORS allowed origin |
+| `COPILOT_COMMAND` | `copilot` | Path to Copilot CLI binary |
+| `CLAUDE_COMMAND` | *(auto-detected)* | Path to Claude CLI binary |
+| `CODEX_COMMAND` | *(auto-detected)* | Path to Codex CLI binary |
+| `ANTHROPIC_API_KEY` | — | Required only if Claude CLI is unavailable |
+| `ELEVENLABS_API_KEY` | — | Optional: higher-quality TTS voices |
+| `LEXOIRE_LOCAL_STT_MODEL` | `Xenova/whisper-base.en` | Whisper model for Windows/Linux speech |
 
-Important backend settings:
+Optional frontend setting (`frontend/.env`):
 
-- `PORT`
-- `DB_PATH`
-- `FRONTEND_ORIGIN`
-- `COPILOT_COMMAND`
-- `LEXOIRE_LOCAL_STT_MODEL` to override the local Whisper-compatible speech model
+| Variable | Purpose |
+|---|---|
+| `VITE_API_URL` | Override backend URL in dev |
 
-The desktop build now prepares a **fully local** speech-recognition model during `npm run build`, and packaged Windows/Linux apps use that local model without any paid API dependency.
+## Desktop app
 
-Optional frontend setting:
+Build and run as a native Electron desktop app:
 
-- `VITE_API_URL`
+```bash
+# Development (builds then launches Electron)
+npm run electron:dev
+
+# Production build for macOS (outputs to dist/)
+npm run electron:build:mac
+
+# Unsigned local package (for testing without code signing)
+npm run electron:pack:local
+```
+
+The build pipeline:
+1. Compiles the Swift speech helper (macOS only)
+2. Downloads and caches the Whisper model
+3. Builds the frontend and backend
+4. Rebuilds native modules (`better-sqlite3`, `onnxruntime-node`) for the Electron ABI
+5. Packages everything with `electron-builder`
 
 ## Project structure
 
-```text
+```
 frontend/   React + Vite UI
-backend/    Express + Socket.IO runtime
+backend/    Express + Socket.IO API server
 electron/   Desktop shell and native integrations
-shared/     Shared TypeScript types
-swift/      Native macOS speech-recognition helper
-website/    Public website and docs site
-docs/       Contributor and release documentation
+swift/      Native macOS speech recognition helper
+docs/       Architecture, development, and getting-started guides
 ```
 
-## Documentation
+## Docs
 
-- `docs/getting-started.md`
-- `docs/development.md`
-- `docs/architecture.md`
-- `CHANGELOG.md`
-- `SECURITY.md`
+- [`docs/getting-started.md`](docs/getting-started.md)
+- [`docs/development.md`](docs/development.md)
+- [`docs/architecture.md`](docs/architecture.md)
 
-## Website deployment
+## License
 
-The public site lives in `website/` and is published with `.github/workflows/deploy-site.yml`.
-
-The install buttons on the site resolve the latest matching desktop release asset from GitHub Releases at runtime and fall back to the generic releases page if no platform asset is available yet.
-
-## Desktop releases
-
-Desktop release artifacts are published with `.github/workflows/release-desktop.yml`.
-
-- Push a tag like `v1.0.0` to build and publish macOS, Windows, and Linux artifacts.
-- Or run the workflow manually to build from the current commit and create/update the matching GitHub release.
-- The release workflow publishes platform assets for the site install buttons to consume:
-  - macOS: `dmg`, `zip`
-  - Windows: `nsis`, `portable`
-  - Linux: `AppImage`, `deb`
-
-## Open-source release notes
-
-Lexoire is released under the **MIT License**.
-
-If you want to publish a true open-source release, keep the license commercially usable. Noncommercial restrictions are **not** open source under the OSI definition.
-
-## Contributing
-
-See `CONTRIBUTING.md` for development workflow, pull request expectations, and validation guidance.
+MIT

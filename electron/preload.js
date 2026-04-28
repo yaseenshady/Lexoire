@@ -16,10 +16,12 @@ contextBridge.exposeInMainWorld('api', {
 // Lexoire native bridge. Browser APIs are preferred in the UI; these are fallbacks.
 contextBridge.exposeInMainWorld('lexoire', {
   platform: process.platform,
-  speak: (text) => ipcRenderer.invoke('tts:speak', text),
+  speak: (payload) => ipcRenderer.invoke('tts:speak', payload),
   stopSpeech: () => ipcRenderer.invoke('tts:stop'),
   getVoiceCapabilities: () => ipcRenderer.invoke('voice:capabilities'),
   requestMic: () => ipcRenderer.invoke('mic:request'),
+  getMicStatus: () => ipcRenderer.invoke('mic:status'),
+  openMicSettings: () => ipcRenderer.invoke('mic:open-settings'),
   startSpeech: () => ipcRenderer.invoke('speech:start'),
   stopSpeechRecognition: () => ipcRenderer.invoke('speech:stop'),
   onSpeech: (cb) => {

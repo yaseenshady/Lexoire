@@ -1,22 +1,19 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { spawn, spawnSync, type ChildProcess } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
+import os from 'os';
+import { getCommandLookupEnv, resolveCommandBinary } from '../utils/command-resolution';
 
 const SYSTEM_PROMPT = `You are Lexoire, an elite AI assistant integrated into a voice-driven automation system. You have full access to tools and the filesystem. Be concise, direct, and action-oriented. When given a task, do it - don't just describe it.`;
 
-function resolveClaudeBinary(): string {
-  const candidates = [
-    process.env.CLAUDE_COMMAND?.trim(),
-    '/Users/yshady/.local/bin/claude',
-    'claude',
-  ].filter(Boolean) as string[];
+const HOME = os.homedir();
 
-  for (const bin of candidates) {
-    const res = spawnSync('which', [bin === '/Users/yshady/.local/bin/claude' ? bin : bin], {
-      encoding: 'utf8',
-    });
-    if (!res.error && (res.status === 0 || bin.startsWith('/'))) return bin;
-  }
-  return '';
+function resolveClaudeBinary(): string {
+  return resolveCommandBinary([
+    process.env.CLAUDE_COMMAND?.trim(),
+    process.platform !== 'win32' ? `${HOME}/.local/bin/claude` : undefined,
+    process.platform !== 'win32' ? `${HOME}/.npm-global/bin/claude` : undefined,
+    'claude',
+  ], '');
 }
 
 const CLAUDE_CLI = resolveClaudeBinary();
@@ -110,7 +107,7 @@ class ClaudeService {
 
       this.currentProcess = spawn(CLAUDE_CLI, args, {
         cwd: process.cwd(),
-        env: { ...process.env },
+        env: getCommandLookupEnv(),
       });
 
       let full = '';

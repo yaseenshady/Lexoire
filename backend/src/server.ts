@@ -18,6 +18,7 @@ import SessionManager from './services/session-manager';
 import SessionMessaging from './services/session-messaging';
 import logger from './services/logger';
 import { appendSessionProgress, buildProviderPrompt, ensureSessionContext } from './services/session-context-md';
+import { getCommandLookupEnv } from './utils/command-resolution';
 import type {
   AppState,
   Conversation,
@@ -204,10 +205,10 @@ function resolveSpeechVoice(lang?: string, requestedVoice?: string): string | un
 }
 
 function commandExists(command: string): boolean {
-  const locator = process.platform === 'win32' ? 'where' : 'which';
+  const locator = process.platform === 'win32' ? 'where.exe' : 'which';
   const result = spawnSync(locator, [command], {
     stdio: 'ignore',
-    env: { ...process.env }
+    env: getCommandLookupEnv()
   });
   return !result.error && result.status === 0;
 }

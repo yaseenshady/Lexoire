@@ -5,9 +5,11 @@ interface Window {
   webkitSpeechRecognition: any;
   lexoire?: {
     platform?: string;
-    speak?: (payload: unknown) => Promise<boolean>;
+    speak?: (payload: string | { text: string; mode?: 'hifi' | 'classic'; voiceName?: string }) => Promise<boolean>;
     stopSpeech?: () => Promise<void>;
     requestMic?: () => Promise<boolean>;
+    getMicStatus?: () => Promise<'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown'>;
+    openMicSettings?: () => Promise<boolean>;
     startSpeech?: () => Promise<void>;
     stopSpeechRecognition?: () => Promise<void>;
     getVoiceCapabilities?: () => Promise<{

@@ -52,6 +52,7 @@ coverage/
 .temp/
 backend/models/transformers/
 electron/node_modules/
+electron/backend-node_modules/
 electron/package.json
 .completion_report.md
 .github/JARVIS_SESSION.md
