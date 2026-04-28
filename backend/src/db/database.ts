@@ -443,6 +443,27 @@ class DatabaseService {
       .filter((conversation): conversation is Conversation => conversation !== null);
   }
 
+  getLatestConversation(projectId?: string): Conversation | null {
+    const row = (projectId
+      ? this.db.prepare(`
+          SELECT * FROM conversations
+          WHERE project_id = ?
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `).get(projectId)
+      : this.db.prepare(`
+          SELECT * FROM conversations
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `).get()) as ConversationRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return this.getConversation(row.id);
+  }
+
   searchMemories(query: string, limit: number = 10): Memory[] {
     const rows = this.db.prepare(`
       SELECT * FROM memories
@@ -603,6 +624,32 @@ class DatabaseService {
     return rows.map((session) => this.mapSession(session));
   }
 
+  getCurrentSession(): Session | null {
+    const row = this.db
+      .prepare('SELECT * FROM sessions WHERE status = ? ORDER BY updated_at DESC LIMIT 1')
+      .get('active') as SessionRow | undefined;
+
+    return row ? this.mapSession(row) : null;
+  }
+
+  getRestorableSessions(): Session[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM sessions
+      WHERE status != 'completed'
+      ORDER BY
+        CASE status
+          WHEN 'active' THEN 0
+          WHEN 'paused' THEN 1
+          WHEN 'thinking' THEN 2
+          ELSE 3
+        END,
+        updated_at DESC,
+        created_at DESC
+    `).all() as SessionRow[];
+
+    return rows.map((session) => this.mapSession(session));
+  }
+
   deleteSession(id: string): void {
     const deleteSession = this.db.transaction((sessionId: string) => {
       this.db.prepare('DELETE FROM session_context_share WHERE from_session_id = ? OR to_session_id = ?').run(sessionId, sessionId);
@@ -632,6 +679,24 @@ class DatabaseService {
       Date.now(),
       id
     );
+  }
+
+  clearActiveSessions(exceptId?: string): void {
+    const now = Date.now();
+    if (exceptId) {
+      this.db.prepare(`
+        UPDATE sessions
+        SET status = 'idle', updated_at = ?
+        WHERE status = 'active' AND id != ?
+      `).run(now, exceptId);
+      return;
+    }
+
+    this.db.prepare(`
+      UPDATE sessions
+      SET status = 'idle', updated_at = ?
+      WHERE status = 'active'
+    `).run(now);
   }
 
   saveSessionMessage(message: SessionMessage): number {

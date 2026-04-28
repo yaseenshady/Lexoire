@@ -35,9 +35,17 @@ interface WorkspaceSession {
   id: string;
   name: string;
   repoPath: string;
+  objective?: string;
+  lastSummary?: string;
   status: 'idle' | 'thinking' | 'active' | 'paused' | 'completed';
   createdAt: number;
   updatedAt: number;
+}
+interface SessionRestorePayload {
+  sessions?: WorkspaceSession[];
+  current?: string;
+  session?: WorkspaceSession | null;
+  conversation?: SavedConversation | null;
 }
 interface CommandResponsePayload {
   result?: string;
@@ -252,6 +260,7 @@ export default function App() {
   const conversationCreatedAtRef = useRef(Date.now());
   const conversationSaveTimerRef = useRef<number | null>(null);
   const queuedPromptDispatchTimerRef = useRef<number | null>(null);
+  const hasHydratedSessionStateRef = useRef(false);
   const interruptionCandidateRef = useRef<{ text: string; firstSeenAt: number; lastSeenAt: number; hits: number } | null>(null);
   const backendSpeechCapabilitiesRef = useRef<VoiceBackendCapabilities | null>(null);
   const backendSpeechCapabilitiesPromiseRef = useRef<Promise<VoiceBackendCapabilities> | null>(null);
@@ -289,6 +298,49 @@ export default function App() {
     setInterim('');
     interimRef.current = '';
     interruptionCandidateRef.current = null;
+  };
+
+  const toAgent = (value: unknown): Agent | undefined => (
+    value === 'copilot' || value === 'claude' || value === 'codex' ? value : undefined
+  );
+
+  const applySavedConversation = (conversation?: SavedConversation | null) => {
+    clearComposer();
+    if (!conversation || !Array.isArray(conversation.messages) || conversation.messages.length === 0) {
+      conversationIdRef.current = `conv-${Date.now()}`;
+      conversationCreatedAtRef.current = Date.now();
+      setMsgs([{ id: nextId.current++, role: 'assistant', text: 'Lexoire online. Awaiting input.', createdAt: Date.now() }]);
+      return;
+    }
+
+    let maxId = 0;
+    const restoredMessages = conversation.messages
+      .filter((message) => message.content.trim())
+      .map((message, index): Msg => {
+        const numericIdMatch = /^msg-(\d+)$/.exec(message.id);
+        const numericId = numericIdMatch ? Number.parseInt(numericIdMatch[1], 10) : index + 1;
+        maxId = Math.max(maxId, numericId);
+        return {
+          id: numericId,
+          role: message.role,
+          text: message.content,
+          agent: toAgent(message.metadata?.agent),
+          createdAt: message.timestamp,
+        };
+      });
+
+    conversationIdRef.current = conversation.id;
+    conversationCreatedAtRef.current = conversation.createdAt;
+    nextId.current = Math.max(nextId.current, maxId + 1);
+    setMsgs(restoredMessages.length > 0
+      ? restoredMessages
+      : [{ id: nextId.current++, role: 'assistant', text: 'Lexoire online. Awaiting input.', createdAt: Date.now() }]);
+
+    const lastAgent = [...restoredMessages].reverse().find((message) => message.agent)?.agent;
+    if (lastAgent) {
+      setAgent(lastAgent);
+      agentRef.current = lastAgent;
+    }
   };
 
   const syncQueuedPromptState = () => {
@@ -662,7 +714,12 @@ export default function App() {
     sock.on('connect', () => {
       logDebug('socket connected');
       clearResponseTimer();
-      syncSessions();
+      if (!hasHydratedSessionStateRef.current) {
+        hasHydratedSessionStateRef.current = true;
+        void hydrateSessionState();
+      } else {
+        syncSessions();
+      }
       if (!busyRef.current) setBusy(false);
     });
     
@@ -887,7 +944,7 @@ export default function App() {
     };
   }, []);
 
-  // ── Speech recognition: browser first, native fallback when available ─────
+  // ── Speech recognition: macOS native first, fallbacks elsewhere ────────────
   useEffect(() => {
     const lexoire = window.lexoire;
     lexoire?.onSpeech?.((ev: { type: string; text?: string }) => {
@@ -1660,7 +1717,18 @@ export default function App() {
       .catch(() => null)
       .then((capabilities: VoiceCapabilities | null | undefined) => {
         const startNativeSpeech = lexoire?.startSpeech;
+        const macNativeOnly = lexoire?.platform === 'darwin';
         const nativeSpeechSupported = capabilities?.nativeSpeechRecognition ?? (lexoire?.platform === 'darwin' && Boolean(startNativeSpeech));
+
+        if (macNativeOnly && (!nativeSpeechSupported || !startNativeSpeech)) {
+          listeningRef.current = false;
+          setListening(false);
+          if (!speechUnavailableNoticeRef.current) {
+            speechUnavailableNoticeRef.current = true;
+            addMsg('assistant', '[ERROR] Native macOS speech recognition is unavailable in this build. Restore the bundled LexoireSpeech helper or relaunch a build that includes it.');
+          }
+          return;
+        }
 
         if (!nativeSpeechSupported || !startNativeSpeech) {
           return startPreferredSpeechFallback('Native speech recognition unavailable.');
@@ -1682,22 +1750,30 @@ export default function App() {
 
             micPermissionRef.current = 'granted';
             setMicPermission('granted');
+            speechUnavailableNoticeRef.current = false;
             // Optimistically show listening — confirmed by LEXOIRE_READY, reverted on error
             listeningRef.current = true;
             setListening(true);
-            // Safety timeout: if LEXOIRE_READY hasn't fired after 5s, fall back to browser speech
+            // On macOS keep the older native-only STT path instead of silently degrading to backend/browser STT.
             clearSwiftTimeout();
             swiftStartTimeoutRef.current = window.setTimeout(() => {
               swiftStartTimeoutRef.current = null;
-              console.warn('[SPEECH] Swift LEXOIRE_READY timeout — falling back to backend/browser speech');
+              console.warn('[SPEECH] Swift LEXOIRE_READY timeout');
               listeningRef.current = false;
               setListening(false);
-              void startPreferredSpeechFallback();
-            }, 5000);
+              if (!speechUnavailableNoticeRef.current) {
+                speechUnavailableNoticeRef.current = true;
+                addMsg('assistant', '[ERROR] Native macOS speech recognition did not become ready. Check Speech Recognition permission in System Settings > Privacy & Security, then relaunch Lexoire.');
+              }
+            }, macNativeOnly ? 20000 : 5000);
             startNativeSpeech().catch((err: unknown) => {
               clearSwiftTimeout();
               listeningRef.current = false;
               setListening(false);
+              if (macNativeOnly) {
+                addMsg('assistant', `[ERROR] Native macOS speech recognition failed to start: ${err instanceof Error ? err.message : String(err)}`);
+                return;
+              }
               void startPreferredSpeechFallback(`Native speech start failed: ${err instanceof Error ? err.message : String(err)}`);
             });
           })
@@ -1726,7 +1802,6 @@ export default function App() {
       if (
         !mutedRef.current
         && micPermissionRef.current !== 'denied'
-        && !busyRef.current
         && !speechActiveRef.current
         && speechQueueRef.current.length === 0
         && !listeningRef.current
@@ -1844,6 +1919,38 @@ export default function App() {
     } catch {}
   };
 
+  const hydrateSessionState = async (targetSessionId?: string) => {
+    try {
+      await refreshSessionStatus();
+      const params = new URLSearchParams();
+      if (targetSessionId) {
+        params.set('sessionId', targetSessionId);
+      }
+
+      const response = await fetch(`/api/session-restore${params.size ? `?${params.toString()}` : ''}`);
+      if (!response.ok) return;
+
+      const payload = await response.json() as SessionRestorePayload;
+      const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+      const currentId = typeof payload.current === 'string' ? payload.current : '';
+      const restoredSession = payload.session
+        ?? (currentId ? sessions.find((session) => session.id === currentId) ?? null : null);
+
+      setWorkspaceSessions(sessions);
+      setActiveWorkspaceSessionId(currentId);
+
+      if (restoredSession?.repoPath) {
+        setSessionDraft((prev) => ({
+          ...prev,
+          repoPath: restoredSession.repoPath,
+          objective: prev.objective.trim() ? prev.objective : (restoredSession.objective || ''),
+        }));
+      }
+
+      applySavedConversation(payload.conversation);
+    } catch {}
+  };
+
   const createWorkspaceSession = async () => {
     const name = sessionDraft.name.trim();
     const repoPath = sessionDraft.repoPath.trim();
@@ -1890,7 +1997,7 @@ export default function App() {
         sessionId: '',
       }));
       setSessionNotice(sessionId ? `Session "${name}" is ready as ${sessionId}.` : `Session "${name}" is ready.`);
-      await refreshWorkspaceSessions();
+      await hydrateSessionState(createdId);
     } catch {
       setSessionNotice('Unable to create session.');
     }
@@ -1901,7 +2008,7 @@ export default function App() {
       const response = await fetch(`/api/sessions/${id}/switch`, { method: 'PUT' });
       if (!response.ok) return;
       setSessionNotice('Session focus updated.');
-      await refreshWorkspaceSessions();
+      await hydrateSessionState(id);
     } catch {}
   };
 
@@ -1927,7 +2034,7 @@ export default function App() {
         setActiveWorkspaceSessionId('');
       }
       setSessionNotice('Session deleted.');
-      await refreshWorkspaceSessions();
+      await hydrateSessionState();
     } catch {}
   };
 
@@ -2239,14 +2346,13 @@ export default function App() {
     stopListening();
 
     const finish = () => {
-      // 3 s echo guard — browser speechSynthesis.onend fires early on macOS,
-      // so audio can still be playing when this callback runs.
-      postSpeechEchoGuardRef.current = Date.now() + 3000;
+      // Short echo guard — macOS onend fires slightly early but 800ms is enough
+      postSpeechEchoGuardRef.current = Date.now() + 800;
 
       if (!speechActiveRef.current && speechQueueRef.current.length === 0) {
-        window.setTimeout(() => { currentSpokenTextRef.current = ''; }, 3000);
+        window.setTimeout(() => { currentSpokenTextRef.current = ''; }, 1500);
         setIsSpeaking(false);
-        scheduleListeningResume(1800);
+        scheduleListeningResume(400);
         return;
       }
       speechActiveRef.current = false;
@@ -2255,8 +2361,8 @@ export default function App() {
         playNextSpeech();
         return;
       }
-      window.setTimeout(() => { currentSpokenTextRef.current = ''; }, 3000);
-      scheduleListeningResume(1800);
+      window.setTimeout(() => { currentSpokenTextRef.current = ''; }, 1500);
+      scheduleListeningResume(400);
     };
 
     const speakWithBrowserSpeech = () => {

@@ -459,6 +459,24 @@ function buildAppState(): AppState {
   };
 }
 
+function buildSessionRestoreState(requestedSessionId?: string) {
+  const sessions = sessionManager.getRestorableSessions();
+  const requestedSession = requestedSessionId
+    ? sessions.find((session) => session.id === requestedSessionId) ?? null
+    : null;
+  const currentSession = requestedSession ?? sessionManager.getPreferredRestoreSession();
+  const conversation = currentSession
+    ? db.getLatestConversation(currentSession.id)
+    : db.getLatestConversation();
+
+  return {
+    sessions,
+    current: currentSession?.id,
+    session: currentSession ?? null,
+    conversation,
+  };
+}
+
 function createExecutionPlan(command: CopilotCommand, createdAt: number): ProjectPlan {
   const planId = `plan-${createdAt}`;
   const shortPrompt = truncateText(command.prompt.trim(), 72);
@@ -611,6 +629,17 @@ app.get('/api/app-state', (req, res) => {
   } catch (error: unknown) {
     const message = getErrorMessage(error);
     logger.error('Failed to build app state:', message);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/session-restore', (req, res) => {
+  try {
+    const requestedSessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId.trim() : '';
+    res.json(buildSessionRestoreState(requestedSessionId || undefined));
+  } catch (error: unknown) {
+    const message = getErrorMessage(error);
+    logger.error('Failed to build session restore state:', message);
     res.status(500).json({ error: message });
   }
 });
@@ -800,11 +829,10 @@ app.get('/api/memories', (req, res) => {
 // Response: { sessions: Session[], current?: string }
 app.get('/api/sessions', (req, res) => {
   try {
-    const sessions = sessionManager.listSessions();
+    const sessions = sessionManager.getRestorableSessions();
     logger.info(`Retrieved ${sessions.length} sessions`);
     
-    // Return sessions array with current session (first active one)
-    const current = sessions.find(s => s.status === 'active')?.id;
+    const current = sessionManager.getPreferredRestoreSession()?.id;
     res.json({ sessions, current });
   } catch (error: unknown) {
     const message = getErrorMessage(error);
@@ -829,11 +857,7 @@ app.post('/api/sessions', (req, res) => {
       return;
     }
 
-    const session = sessionManager.createSession(name, repoPath, branch, sessionId || undefined);
-    if (objective) {
-      session.objective = objective;
-      sessionManager.updateSessionSummary(session.id, objective);
-    }
+    const session = sessionManager.createSession(name, repoPath, branch, sessionId || undefined, objective);
     const contextPath = ensureSessionContext(session);
     
     logger.info(`Created session: ${session.id}`);
@@ -1346,8 +1370,8 @@ io.on('connection', (socket) => {
   // Client emits session:list-request
   socket.on('session:list-request', () => {
     try {
-      const sessions = sessionManager.listSessions();
-      const current = sessions.find(s => s.status === 'active')?.id;
+      const sessions = sessionManager.getRestorableSessions();
+      const current = sessionManager.getPreferredRestoreSession()?.id;
       logger.info(`Session list requested - ${sessions.length} active sessions`);
       socket.emit('session:list', { sessions, current });
     } catch (error: unknown) {
@@ -1371,11 +1395,7 @@ io.on('connection', (socket) => {
         return;
       }
 
-      const session = sessionManager.createSession(name, repo_path, branch, sessionId || undefined);
-      if (objective) {
-        session.objective = objective;
-        sessionManager.updateSessionSummary(session.id, objective);
-      }
+      const session = sessionManager.createSession(name, repo_path, branch, sessionId || undefined, objective);
 
       logger.info(`Session created via Socket.IO: ${session.id}`);
       io.emit('session:created', { id: session.id, session });

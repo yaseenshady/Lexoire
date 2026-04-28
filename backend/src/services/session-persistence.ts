@@ -33,10 +33,10 @@ class SessionPersistence {
   }
 
   /**
-   * Load all active and paused sessions
+   * Load all non-completed sessions
    */
   async loadSessions(): Promise<Session[]> {
-    return this.db.getActiveAndPausedSessions();
+    return this.db.getRestorableSessions();
   }
 
   /**

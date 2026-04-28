@@ -10,7 +10,7 @@ class SessionManager {
     this.persistence = new SessionPersistence(db);
   }
 
-  createSession(name: string, repoPath: string, branch?: string, sessionId?: string): Session {
+  createSession(name: string, repoPath: string, branch?: string, sessionId?: string, objective?: string): Session {
     const now = Date.now();
     const resolvedId = sessionId?.trim() || `session-${randomUUID()}`;
     if (this.db.getSession(resolvedId)) {
@@ -24,7 +24,7 @@ class SessionManager {
       repoPath,
       branch,
       status: 'idle',
-      objective: undefined,
+      objective: objective?.trim() || undefined,
       lastSummary: undefined,
       focusLevel: 0,
       metadata: {},
@@ -41,6 +41,18 @@ class SessionManager {
     return this.db.getAllSessions();
   }
 
+  getCurrentSession(): Session | null {
+    return this.db.getCurrentSession();
+  }
+
+  getRestorableSessions(): Session[] {
+    return this.db.getRestorableSessions();
+  }
+
+  getPreferredRestoreSession(): Session | null {
+    return this.db.getCurrentSession() ?? this.db.getRestorableSessions()[0] ?? null;
+  }
+
   getSession(id: string): Session | null {
     return this.db.getSession(id);
   }
@@ -51,6 +63,7 @@ class SessionManager {
       return null;
     }
 
+    this.db.clearActiveSessions(id);
     session.status = 'active';
     session.updatedAt = Date.now();
     this.db.saveSession(session);
@@ -71,6 +84,7 @@ class SessionManager {
   resumeSession(id: string): void {
     const session = this.db.getSession(id);
     if (session) {
+      this.db.clearActiveSessions(id);
       session.status = 'active';
       session.updatedAt = Date.now();
       this.db.saveSession(session);

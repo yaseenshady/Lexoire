@@ -9,7 +9,7 @@ let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))!
 let audioEngine = AVAudioEngine()
 let request = SFSpeechAudioBufferRecognitionRequest()
 request.shouldReportPartialResults = true
-request.requiresOnDeviceRecognition = false
+request.requiresOnDeviceRecognition = true
 
 var task: SFSpeechRecognitionTask?
 
