@@ -130,6 +130,34 @@ class CodexService {
       let full = '';
       let buf = '';
       let errorBuffer = '';
+      let streamedTextUsed = false;
+
+      const emitText = (textValue: unknown) => {
+        if (typeof textValue !== 'string' || !textValue) return;
+        onChunk(textValue);
+        full += textValue;
+        streamedTextUsed = true;
+      };
+
+      const emitContentBlocks = (content: unknown) => {
+        if (typeof content === 'string') {
+          emitText(content);
+          return;
+        }
+        if (!Array.isArray(content)) return;
+        for (const block of content) {
+          if (typeof block === 'string') {
+            emitText(block);
+          } else if (block && typeof block === 'object') {
+            const typedBlock = block as { type?: string; text?: string; content?: string };
+            if ((typedBlock.type === 'text' || typedBlock.type === 'output_text') && typedBlock.text) {
+              emitText(typedBlock.text);
+            } else if (typedBlock.content) {
+              emitText(typedBlock.content);
+            }
+          }
+        }
+      };
 
       const handleLine = (line: string) => {
         const t = line.trim();
@@ -139,22 +167,27 @@ class CodexService {
 
           // Text delta streaming
           if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
-            onChunk(ev.delta.text); full += ev.delta.text; return;
+            emitText(ev.delta.text);
+            return;
           }
           // Codex message event with content array
           if (ev.type === 'message' && ev.message?.role === 'assistant') {
-            const content = ev.message.content;
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (block.type === 'text') { onChunk(block.text); full += block.text; }
-              }
-            } else if (typeof content === 'string') {
-              onChunk(content); full += content;
-            }
+            emitContentBlocks(ev.message.content);
           }
           // Generic assistant/output text event
           if ((ev.type === 'output_text' || ev.type === 'assistant') && ev.text) {
-            onChunk(ev.text); full += ev.text;
+            emitText(ev.text);
+          }
+          // Current Codex CLI JSONL emits final assistant text as:
+          // { type: "item.completed", item: { type: "agent_message", text: "..." } }
+          if (ev.type === 'item.completed' && ev.item?.type === 'agent_message') {
+            emitText(ev.item.text);
+          }
+          if (ev.type === 'item.completed' && ev.item?.type === 'message' && ev.item?.role === 'assistant') {
+            emitContentBlocks(ev.item.content);
+          }
+          if (ev.type === 'item.updated' && ev.item?.type === 'agent_message' && ev.item?.text_delta) {
+            emitText(ev.item.text_delta);
           }
           // Session ID capture
           if (ev.session_id && typeof ev.session_id === 'string') {
@@ -163,10 +196,13 @@ class CodexService {
           if (ev.type === 'session_started' && ev.id) {
             sessionIds.set(sessionId, ev.id);
           }
+          if (ev.type === 'thread.started' && ev.thread_id) {
+            sessionIds.set(sessionId, ev.thread_id);
+          }
           // Final result fallback
-          if (ev.type === 'result' && !full) {
+          if (ev.type === 'result' && !streamedTextUsed) {
             const r = ev.result ?? ev.text ?? '';
-            if (r) { onChunk(r); full = r; }
+            if (r) emitText(r);
             if (ev.session_id) sessionIds.set(sessionId, ev.session_id);
           }
         } catch {
