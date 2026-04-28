@@ -394,6 +394,51 @@ function mapWindowsSpeechRate(rate) {
   return Math.min(10, Math.max(-10, Math.round((rate - DEFAULT_HIFI_TTS_RATE) / 8)));
 }
 
+function mapWindowsWinRtSpeechRate(rate) {
+  return Math.min(2.2, Math.max(0.45, rate / DEFAULT_HIFI_TTS_RATE));
+}
+
+function buildWindowsWinRtTtsScript(rate) {
+  const winRtRate = mapWindowsWinRtSpeechRate(rate).toFixed(2);
+  const sapiRate = mapWindowsSpeechRate(rate);
+  return [
+    '$ErrorActionPreference = "Stop";',
+    '$text = [Console]::In.ReadToEnd();',
+    'if ([string]::IsNullOrWhiteSpace($text)) { exit 0 }',
+    '$tmp = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "lexoire-tts-" + [System.Guid]::NewGuid().ToString() + ".wav");',
+    'try {',
+    '  Add-Type -AssemblyName System.Runtime.WindowsRuntime;',
+    '  [Windows.Media.SpeechSynthesis.SpeechSynthesizer, Windows.Media.SpeechSynthesis, ContentType=WindowsRuntime] > $null;',
+    '  [Windows.Media.SpeechSynthesis.SpeechSynthesizerOptions, Windows.Media.SpeechSynthesis, ContentType=WindowsRuntime] > $null;',
+    '  $synth = [Windows.Media.SpeechSynthesis.SpeechSynthesizer]::new();',
+    '  $voices = [Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices;',
+    '  $preferred = $voices | Where-Object { $_.DisplayName -match "Jenny|Aria|Ava|Emma|Zira|Natural|Neural" -and $_.Language -match "^en" } | Select-Object -First 1;',
+    '  if ($preferred) { $synth.Voice = $preferred; }',
+    `  if ($synth.Options.PSObject.Properties.Name -contains "SpeakingRate") { $synth.Options.SpeakingRate = ${winRtRate}; }`,
+    '  $op = $synth.SynthesizeTextToStreamAsync($text);',
+    '  $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq "AsTask" -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq "IAsyncOperation`1" } | Select-Object -First 1;',
+    '  $task = $asTask.Invoke($null, @($op));',
+    '  $task.Wait();',
+    '  $speechStream = $task.Result;',
+    '  $inputStream = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($speechStream);',
+    '  $outputStream = [System.IO.File]::Create($tmp);',
+    '  $inputStream.CopyTo($outputStream);',
+    '  $outputStream.Dispose();',
+    '  $inputStream.Dispose();',
+    '  $player = [System.Media.SoundPlayer]::new($tmp);',
+    '  $player.PlaySync();',
+    '} catch {',
+    '  Add-Type -AssemblyName System.Speech;',
+    '  $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;',
+    `  $synth.Rate = ${sapiRate};`,
+    '  $synth.Speak($text);',
+    '  $synth.Dispose();',
+    '} finally {',
+    '  if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue; }',
+    '}',
+  ].join(' ');
+}
+
 function mapSpeechDispatcherRate(rate) {
   return Math.min(100, Math.max(-100, Math.round((rate - DEFAULT_HIFI_TTS_RATE) * 0.8)));
 }
@@ -425,14 +470,7 @@ function resolveTtsRuntime() {
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          [
-            'Add-Type -AssemblyName System.Speech;',
-            '$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;',
-            `$synth.Rate = ${mapWindowsSpeechRate(rate)};`,
-            '$text = [Console]::In.ReadToEnd();',
-            'if (-not [string]::IsNullOrWhiteSpace($text)) { $synth.Speak($text); }',
-            '$synth.Dispose();',
-          ].join(' '),
+          buildWindowsWinRtTtsScript(rate),
         ],
       };
     }
