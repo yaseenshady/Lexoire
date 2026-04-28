@@ -78,10 +78,14 @@ export function resolveCommandBinary(
       const resolved = result.stdout
         .split(/\r?\n/)
         .map((line) => line.trim())
-        .find(Boolean);
+        .filter(Boolean);
 
-      if (resolved) {
-        return resolved;
+      const directExecutable = process.platform === 'win32'
+        ? resolved.find((line) => /\.exe$/i.test(line))
+        : resolved[0];
+
+      if (directExecutable) {
+        return directExecutable;
       }
     }
   }

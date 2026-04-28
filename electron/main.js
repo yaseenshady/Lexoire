@@ -38,7 +38,7 @@ const resourcesPath = app.isPackaged
   ? path.join(process.resourcesPath, 'app.asar')
   : path.join(__dirname, '..');
 
-function waitForBackend(port, maxWaitMs = 15000) {
+function waitForBackend(port, maxWaitMs = 30000) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
 
@@ -256,7 +256,7 @@ function getBackendRuntime() {
     env.LEXOIRE_LOCAL_STT_OFFLINE_ONLY = '1';
   }
 
-  if (process.versions?.electron) {
+  if (app.isPackaged) {
     return {
       command: process.execPath,
       args: [],
@@ -265,7 +265,7 @@ function getBackendRuntime() {
   }
 
   return {
-    command: process.execPath,
+    command: process.platform === 'win32' ? 'node.exe' : 'node',
     args: [],
     env,
   };
