@@ -18,6 +18,8 @@ const RELEASES_API_URL = "https://api.github.com/repos/yaseensh/Lexoire/releases
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
+const isWindows = () => /Win/i.test(window.navigator.platform || window.navigator.userAgent || "");
+
 const readMotionPreference = () => {
   const query = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
   return Boolean(query?.matches);
@@ -43,6 +45,7 @@ const setupEffectFallbacks = () => {
     : CSS.supports("backdrop-filter", "blur(3px)") || CSS.supports("-webkit-backdrop-filter", "blur(3px)");
   const forcedColors = hasForcedColors();
 
+  root.classList.toggle("is-windows", isWindows());
   root.classList.toggle("visual-effects-fallback", forcedColors || !supportsBlendMode);
   root.classList.toggle("glass-effects-fallback", forcedColors || !supportsBackdropFilter);
 };
@@ -50,9 +53,10 @@ const setupEffectFallbacks = () => {
 const getAnimationProfile = () => {
   const width = window.innerWidth;
   const dpr = window.devicePixelRatio || 1;
+  const windows = isWindows();
 
   if (state.reducedMotion) {
-    return { dpr: 1, matrixFps: 0, flowFps: 0, sphereDots: 0, particles: 0, circuits: 0, gridStep: 84 };
+    return { dpr: 1, matrixFps: 0, flowFps: 12, sphereDots: 420, particles: 8, circuits: 2, gridStep: 84 };
   }
 
   if (width < 640) {
@@ -60,10 +64,10 @@ const getAnimationProfile = () => {
   }
 
   if (width < 1024) {
-    return { dpr: Math.min(dpr, 1.1), matrixFps: 20, flowFps: 40, sphereDots: 900, particles: 42, circuits: 8, gridStep: 62 };
+    return { dpr: Math.min(dpr, windows ? 1 : 1.1), matrixFps: windows ? 16 : 20, flowFps: windows ? 30 : 40, sphereDots: windows ? 640 : 900, particles: windows ? 28 : 42, circuits: windows ? 5 : 8, gridStep: 62 };
   }
 
-  return { dpr: Math.min(dpr, 1.35), matrixFps: 24, flowFps: 60, sphereDots: 1500, particles: 72, circuits: 12, gridStep: 56 };
+  return { dpr: Math.min(dpr, windows ? 1 : 1.35), matrixFps: windows ? 18 : 24, flowFps: windows ? 30 : 60, sphereDots: windows ? 900 : 1500, particles: windows ? 42 : 72, circuits: windows ? 7 : 12, gridStep: 56 };
 };
 
 const setCurrentYear = () => {
@@ -399,7 +403,7 @@ const setupScrollReaction = () => {
 const setupMatrixCanvas = () => {
   const canvas = document.querySelector("[data-matrix-canvas]");
   if (!(canvas instanceof HTMLCanvasElement)) return;
-  const context = canvas.getContext("2d");
+  const context = canvas.getContext("2d", { alpha: true, desynchronized: true });
   if (!context) return;
 
   const glyphs = "LEXOIRE 01 ROUTE VOICE SESSION PROVIDER MEMORY STREAM";
@@ -417,6 +421,7 @@ const setupMatrixCanvas = () => {
     const ratio = profile.dpr;
     width = window.innerWidth;
     height = window.innerHeight;
+    if (width <= 0 || height <= 0) return;
     canvas.width = Math.floor(width * ratio);
     canvas.height = Math.floor(height * ratio);
     canvas.style.width = `${width}px`;
@@ -458,7 +463,7 @@ const setupMatrixCanvas = () => {
 const setupFlowCanvas = () => {
   const canvas = document.querySelector("[data-flow-canvas]");
   if (!(canvas instanceof HTMLCanvasElement)) return;
-  const context = canvas.getContext("2d");
+  const context = canvas.getContext("2d", { alpha: true, desynchronized: true });
   if (!context) return;
 
   let width = 0;
@@ -477,6 +482,7 @@ const setupFlowCanvas = () => {
     const ratio = profile.dpr;
     width = window.innerWidth;
     height = window.innerHeight;
+    if (width <= 0 || height <= 0) return;
     canvas.width = Math.floor(width * ratio);
     canvas.height = Math.floor(height * ratio);
     canvas.style.width = `${width}px`;
@@ -536,17 +542,18 @@ const setupFlowCanvas = () => {
 
     lastFrame = time;
     context.clearRect(0, 0, width, height);
+    const motion = state.reducedMotion ? 0.14 : 1;
 
-    drawBeam(time, 0.05, 0.075);
-    drawBeam(time, 0.42, 0.052);
-    drawBeam(time, 0.72, 0.042);
+    drawBeam(time * motion, 0.05, state.reducedMotion ? 0.042 : 0.075);
+    drawBeam(time * motion, 0.42, state.reducedMotion ? 0.032 : 0.052);
+    drawBeam(time * motion, 0.72, state.reducedMotion ? 0.026 : 0.042);
 
     const sphereSize = Math.min(width, height) * (width < 820 ? 1.02 : 0.92);
     const sphereX = width * (width < 820 ? 0.58 : 0.67) + (state.mouseX / width - 0.5) * 78;
     const sphereY = height * 0.42 + (state.mouseY / height - 0.5) * 52 + state.scroll * 58;
-    const rotation = time * 0.00028 + state.scroll * 1.45;
-    const tilt = -0.34 + Math.sin(time * 0.00022) * 0.11;
-    const speechPulse = 1 + Math.sin(time * 0.0019) * 0.055 + Math.max(0, state.scrollVelocity) * 0.0012;
+    const rotation = time * 0.00028 * motion + state.scroll * 1.45 * motion;
+    const tilt = -0.34 + Math.sin(time * 0.00022 * motion) * 0.11 * motion;
+    const speechPulse = 1 + Math.sin(time * 0.0019 * motion) * 0.055 * motion + Math.max(0, state.scrollVelocity) * 0.0012 * motion;
 
     context.save();
     context.globalCompositeOperation = "lighter";
@@ -563,12 +570,12 @@ const setupFlowCanvas = () => {
 
     sphereDots.forEach((dot) => {
       const surfaceRipple = 1
-        + Math.sin(time * 0.0026 * dot.drift + dot.phase + dot.phi * 3) * 0.08
-        + Math.sin(time * 0.0015 + dot.theta * 8) * 0.045;
+        + Math.sin(time * 0.0026 * dot.drift * motion + dot.phase + dot.phi * 3) * 0.08 * motion
+        + Math.sin(time * 0.0015 * motion + dot.theta * 8) * 0.045 * motion;
       const dynamicRadius = dot.baseRadius * speechPulse * surfaceRipple;
-      const swirl = Math.sin(time * 0.0014 + dot.phase) * 0.032;
-      const sourceX = (dot.x / dot.baseRadius) * dynamicRadius + Math.cos(dot.phase + time * 0.001) * swirl;
-      const sourceY = (dot.y / dot.baseRadius) * dynamicRadius + Math.sin(dot.phase + time * 0.0013) * swirl;
+      const swirl = Math.sin(time * 0.0014 * motion + dot.phase) * 0.032 * motion;
+      const sourceX = (dot.x / dot.baseRadius) * dynamicRadius + Math.cos(dot.phase + time * 0.001 * motion) * swirl;
+      const sourceY = (dot.y / dot.baseRadius) * dynamicRadius + Math.sin(dot.phase + time * 0.0013 * motion) * swirl;
       const sourceZ = (dot.z / dot.baseRadius) * dynamicRadius;
       const cos = Math.cos(rotation);
       const sin = Math.sin(rotation);
@@ -581,7 +588,7 @@ const setupFlowCanvas = () => {
       const scale = sphereSize * (0.38 + depth * 0.17);
       const x = sphereX + rotatedX * scale;
       const y = sphereY + tiltedY * scale;
-      const alpha = 0.09 + depth * 0.56 + Math.sin(time * 0.004 + dot.phase) * 0.06;
+      const alpha = 0.09 + depth * 0.56 + Math.sin(time * 0.004 * motion + dot.phase) * 0.06 * motion;
       const radius = dot.size * (0.75 + depth * 2.15);
 
       context.fillStyle = `rgba(57, 255, 136, ${alpha})`;
@@ -603,7 +610,7 @@ const setupFlowCanvas = () => {
     for (let y = -40; y < height + 40; y += profile.gridStep) {
       context.beginPath();
       for (let x = 0; x <= width; x += 44) {
-        const warp = Math.sin(x * 0.009 + y * 0.015 + time * 0.0007 + state.scroll * 8) * 8;
+        const warp = Math.sin(x * 0.009 + y * 0.015 + time * 0.0007 * motion + state.scroll * 8 * motion) * 8 * motion;
         const py = y + warp + state.scroll * 28;
         if (x === 0) context.moveTo(x, py);
         else context.lineTo(x, py);
@@ -612,8 +619,8 @@ const setupFlowCanvas = () => {
     }
 
     circuits.forEach((line) => {
-      const progress = ((time * line.speed * 0.04 + line.phase) % (width + line.length)) - line.length;
-      const y = line.y + Math.sin(time * 0.0005 + line.phase) * 18;
+      const progress = ((time * line.speed * 0.04 * motion + line.phase) % (width + line.length)) - line.length;
+      const y = line.y + Math.sin(time * 0.0005 * motion + line.phase) * 18 * motion;
       context.strokeStyle = "rgba(57, 255, 136, 0.16)";
       context.beginPath();
       context.moveTo(progress, y);
@@ -624,8 +631,8 @@ const setupFlowCanvas = () => {
     });
 
     particles.forEach((particle) => {
-      particle.x += particle.vx * particle.z + Math.sin(time * 0.001 + particle.y) * 0.08;
-      particle.y += particle.vy * particle.z - state.scrollVelocity * 0.01;
+      particle.x += (particle.vx * particle.z + Math.sin(time * 0.001 * motion + particle.y) * 0.08) * motion;
+      particle.y += particle.vy * particle.z * motion - state.scrollVelocity * 0.01 * motion;
       if (particle.y < -20) {
         particle.y = height + 20;
         particle.x = Math.random() * width;

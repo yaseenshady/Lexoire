@@ -1481,6 +1481,29 @@ html.visual-effects-fallback .flow-canvas {
   opacity: 0.82;
 }
 
+html.is-windows {
+  --sphere-opacity: 0.9;
+  --overlay-opacity: 0.28;
+  --grey-scrim-opacity: 0.5;
+}
+
+html.is-windows body::before {
+  filter: blur(10px);
+}
+
+html.is-windows .sphere-focus,
+html.is-windows .flow-canvas,
+html.is-windows .matrix-canvas,
+html.is-windows .scan-sweep,
+html.is-windows .vertical-energy-bar,
+html.is-windows .crt-noise {
+  mix-blend-mode: normal;
+}
+
+html.is-windows .matrix-canvas {
+  opacity: 0.08;
+}
+
 html.glass-effects-fallback .docs-readability-overlay {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -1998,7 +2021,6 @@ html.glass-effects-fallback .install-button {
     scroll-behavior: auto !important;
   }
 
-  .flow-canvas,
   .matrix-canvas,
   .scan-sweep,
   .vertical-energy-bar,
