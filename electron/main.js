@@ -731,7 +731,7 @@ ipcMain.handle('tts:speak', async (_, payload) => {
   const voiceName = typeof payload === 'object' && payload !== null && typeof payload.voiceName === 'string'
     ? payload.voiceName.trim()
     : '';
-  const clean = String(text).replace(/["`$\\]/g, ' ').trim().substring(0, 400);
+  const clean = String(text).replace(/["`$\\]/g, ' ').trim().substring(0, 3000);
   if (!clean) return false;
   return new Promise((resolve, reject) => {
     sayQueue.push({ text: clean, mode, voiceName, resolve, reject });

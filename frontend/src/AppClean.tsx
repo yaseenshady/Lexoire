@@ -2924,22 +2924,12 @@ export default function App() {
     if (!voiceRepliesRef.current) return;
     const clean = stripSpeechMarkup(text);
     if (!clean) return;
-    // Split into sentence segments so long responses are fully spoken, not truncated.
-    // Cap total spoken content at ~1500 chars to avoid reading enormous outputs forever.
-    const capped = clean.length > 1500 ? clean.substring(0, 1500) : clean;
-    const segments = capped.match(/[^.!?\n]+[.!?\n]+/g) ?? [capped];
-    let queued = 0;
-    for (const seg of segments) {
-      const s = seg.trim();
-      if (s && queued < 8) {
-        speechQueueRef.current.push(s);
-        queued++;
-      }
-    }
-    // Handle trailing text with no sentence terminator
-    if (queued === 0 && capped.trim()) {
-      speechQueueRef.current.push(capped);
-    }
+    // Pass the full response as a single utterance so the TTS engine (native say or
+    // browser SpeechSynthesis) handles sentence boundaries naturally without spawning
+    // a new process per sentence. This eliminates the inter-sentence pause gaps.
+    // Cap at 2000 chars to avoid reading enormous outputs forever.
+    const capped = clean.length > 2000 ? clean.substring(0, 2000) : clean;
+    speechQueueRef.current.push(capped);
     setSpeechQueueCount(speechQueueRef.current.length);
     if (!speechActiveRef.current) playNextSpeech();
   };

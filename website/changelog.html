@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lexoire Changelog</title>
+  <meta
+    name="description"
+    content="Lexoire release history — every version, what changed, what was fixed, and what was added."
+  />
+  <link rel="icon" href="./icon.png" />
+  <link rel="stylesheet" href="./assets/styles.css" />
+  <style>
+    .changelog-layout {
+      width: min(100% - 28px, 860px);
+      margin: 0 auto;
+      padding: calc(var(--nav-height) + 60px) 0 100px;
+    }
+
+    .changelog-entry {
+      margin-top: clamp(52px, 9vh, 100px);
+      padding-top: 0;
+    }
+
+    .changelog-entry:first-of-type {
+      margin-top: 42px;
+    }
+
+    .changelog-version {
+      display: flex;
+      align-items: baseline;
+      gap: 18px;
+      flex-wrap: wrap;
+      margin-bottom: 28px;
+    }
+
+    .changelog-version-tag {
+      color: var(--green);
+      font-size: clamp(1.5rem, 5vw, 2.4rem);
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      text-shadow: 0 0 22px rgba(57, 255, 136, 0.28);
+    }
+
+    .changelog-date {
+      color: var(--muted);
+      font-size: 0.82rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .changelog-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border: 1px solid rgba(57, 255, 136, 0.38);
+      border-radius: 2px;
+      color: var(--green);
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .changelog-section-label {
+      margin: 28px 0 12px;
+      color: var(--amber);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+    }
+
+    .changelog-list {
+      margin: 0;
+      padding: 0 0 0 1.2em;
+      list-style: none;
+      display: grid;
+      gap: 10px;
+    }
+
+    .changelog-list li {
+      position: relative;
+      padding-left: 1.1em;
+      color: var(--text);
+      font-size: clamp(0.92rem, 1.6vw, 1.02rem);
+      line-height: 1.7;
+      opacity: 0.88;
+    }
+
+    .changelog-list li::before {
+      content: "›";
+      position: absolute;
+      left: 0;
+      color: var(--green);
+    }
+
+    .changelog-rule {
+      border: none;
+      border-top: 1px solid rgba(57, 255, 136, 0.1);
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+  <canvas class="matrix-canvas" data-matrix-canvas aria-hidden="true"></canvas>
+  <canvas class="flow-canvas" data-flow-canvas aria-hidden="true"></canvas>
+  <div class="sphere-focus" aria-hidden="true"></div>
+  <div class="cursor-glow" data-cursor-glow aria-hidden="true"></div>
+  <div class="cursor-reticle" data-cursor-reticle aria-hidden="true"></div>
+  <div class="crt-noise" aria-hidden="true"></div>
+  <div class="vertical-energy-bar" aria-hidden="true"></div>
+  <div class="scan-sweep" aria-hidden="true"></div>
+
+  <nav class="site-nav" data-site-nav>
+    <a class="brand" href="./index.html" aria-label="Lexoire home">
+      <span class="brand__mark">L</span>
+      <span class="brand__name">LEXOIRE</span>
+    </a>
+
+    <button class="nav-toggle" type="button" data-nav-toggle aria-label="Toggle navigation">
+      MENU
+    </button>
+
+    <div class="site-nav__links">
+      <a href="./index.html">Home</a>
+      <a href="./index.html#install">Install</a>
+      <a href="./developer-docs.html">Docs</a>
+      <a href="./news.html">News</a>
+      <a class="active" href="./changelog.html">Changelog</a>
+      <a href="https://github.com/yaseensh/Lexoire" target="_blank" rel="noreferrer">GitHub</a>
+    </div>
+  </nav>
+
+  <main class="changelog-layout">
+    <p class="eyebrow terminal-reveal">RELEASE HISTORY</p>
+    <h1 class="distort-heading terminal-reveal">Changelog.</h1>
+
+    <!-- v1.1.0 -->
+    <article class="changelog-entry terminal-reveal">
+      <div class="changelog-version">
+        <span class="changelog-version-tag">v1.1.0</span>
+        <span class="changelog-date">Apr 29, 2026</span>
+        <span class="changelog-badge">Latest</span>
+      </div>
+      <hr class="changelog-rule" />
+
+      <p class="changelog-section-label">Added</p>
+      <ul class="changelog-list">
+        <li>GitHub nav link across all website pages</li>
+        <li>Changelog page on the website</li>
+        <li>Multi-session support — all three providers (Claude, Copilot, Codex) run concurrent sessions without blocking each other</li>
+        <li>Codex: removed busy guard so multiple prompts spawn independent process slots</li>
+        <li>Interrupt button cancels TTS queue and immediately resumes the mic</li>
+      </ul>
+
+      <p class="changelog-section-label">Changed</p>
+      <ul class="changelog-list">
+        <li>TTS now passes the full response as a single utterance — eliminates inter-sentence startup gaps and pauses</li>
+        <li>Native TTS character cap raised from 400 to 3000 for longer responses without truncation</li>
+        <li>TTS markdown stripper extended to handle code fences, tables, links, and bullet noise</li>
+        <li>Codex streaming status label changed from "Streaming · N chars" to "Working"</li>
+        <li>Mobile nav: full-width dropdown with solid background and 44px tap targets</li>
+        <li>Mobile hero: typing animation disabled on small screens, action links get proper touch zones</li>
+      </ul>
+
+      <p class="changelog-section-label">Fixed</p>
+      <ul class="changelog-list">
+        <li>Mic goes stale after TTS — now force-restarts the recognizer after each playback</li>
+        <li>Interim speech lost when TTS starts — now cached and restored after playback ends</li>
+        <li>Multi-window mic conflict — only the active window owns the speech recognizer</li>
+        <li>Speech recognition broken after ownership changes — ownership drift now detected and corrected</li>
+      </ul>
+    </article>
+
+    <!-- v1.0.0 -->
+    <article class="changelog-entry terminal-reveal">
+      <div class="changelog-version">
+        <span class="changelog-version-tag">v1.0.0</span>
+        <span class="changelog-date">Apr 26, 2026</span>
+      </div>
+      <hr class="changelog-rule" />
+
+      <p class="changelog-section-label">Added</p>
+      <ul class="changelog-list">
+        <li>Initial public release</li>
+        <li>Voice command layer for Claude, Copilot, and Codex CLI tools</li>
+        <li>Session memory — Claude CLI sessions persist across server restarts via <code>--resume</code></li>
+        <li>Cross-provider handoff via markdown — every prompt embeds the full session context</li>
+        <li>Mac TTS: Samantha voice at 210 WPM</li>
+        <li>Windows TTS: SAPI voice selection with WinRT neural voice support</li>
+        <li>Linux TTS: espeak-ng and spd-say with English locale</li>
+        <li>Public release docs in <code>docs/</code></li>
+        <li><code>SECURITY.md</code>, example environment files, and basic CI workflow</li>
+      </ul>
+
+      <p class="changelog-section-label">Changed</p>
+      <ul class="changelog-list">
+        <li>Standardized package metadata on the MIT license</li>
+        <li>Updated public-facing branding to Lexoire in release-critical files</li>
+        <li>Simplified the root documentation layout for public release</li>
+      </ul>
+
+      <p class="changelog-section-label">Removed</p>
+      <ul class="changelog-list">
+        <li>Tracked internal session-history files</li>
+        <li>Tracked generated database WAL/SHM artifacts</li>
+        <li>Tracked compiled Swift binary from source control</li>
+      </ul>
+    </article>
+  </main>
+
+  <footer class="terminal-footer">
+    <span>LEXOIRE</span>
+    <span>VOICE COMMAND INFRASTRUCTURE</span>
+    <span><span data-current-year></span></span>
+  </footer>
+
+  <script src="./assets/site.js"></script>
+</body>
+</html>
