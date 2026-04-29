@@ -2989,16 +2989,14 @@ export default function App() {
         padding: '12px 80px 12px 20px',
         borderBottom: '1px solid #10ff5015',
         background: 'linear-gradient(135deg, rgba(1, 30, 12, 0.8), rgba(5, 20, 8, 0.6))',
-        display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'nowrap',
+        display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
         backdropFilter: 'blur(20px)',
         position: 'sticky',
         top: 0,
         zIndex: 10,
         flexShrink: 0,
         minHeight: 60,
-        maxHeight: 86,
-        overflowX: 'auto',
-        overflowY: 'visible',
+        overflow: 'visible',
       } as any}>
         <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: 8, color: '#10ff50', textTransform: 'uppercase' }}>LEXOIRE</span>
         <span style={{ fontSize: 10, letterSpacing: 4, color: '#10ff5060', textTransform: 'uppercase' }}>AI ORCHESTRATOR</span>
@@ -3027,7 +3025,7 @@ export default function App() {
           })}
         </div>
 
-        <div className="lexoire-no-drag" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, position: 'relative', flexWrap: 'nowrap', justifyContent: 'flex-end', flex: '1 0 auto' }}>
+        <div className="lexoire-no-drag" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, position: 'relative', flexWrap: 'wrap', justifyContent: 'flex-end', flex: '1 1 360px' }}>
           <button onClick={() => setSessionDropdownOpen(v => !v)} style={{
             background: 'linear-gradient(135deg, rgba(16, 255, 80, 0.12), rgba(0, 204, 120, 0.05))',
             border: '1px solid #10ff5030',
