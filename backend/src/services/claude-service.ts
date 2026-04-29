@@ -236,10 +236,8 @@ class ClaudeService {
         }
 
         if (code !== 0 && !full.trim()) {
-          // Clear stale session so next prompt starts fresh
-          sessionIds.delete(sessionId);
           const errMsg = stderrBuf.trim() || `Claude CLI exited with code ${code}`;
-          console.error(`[Claude CLI] Failed (exit ${code}): ${errMsg.slice(0, 200)}`);
+          console.error(`[Claude CLI] Failed (exit ${code}); preserving resumable session. ${errMsg.slice(0, 200)}`);
           resolve({ text: `[Claude error] ${errMsg.slice(0, 300)}` });
           return;
         }

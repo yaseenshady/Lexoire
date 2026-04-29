@@ -9,6 +9,10 @@ const state = {
   mouseY: initialMouseY,
   targetMouseX: initialMouseX,
   targetMouseY: initialMouseY,
+  touchX: initialMouseX,
+  touchY: initialMouseY,
+  touchForce: 0,
+  targetTouchForce: 0,
   visible: true,
   reducedMotion: false,
 };
@@ -58,6 +62,36 @@ const getSphereStory = (scroll) => {
     pulseFreq: lerp(lo.pulseFreq, hi.pulseFreq),
     beamAlpha: lerp(lo.beamAlpha, hi.beamAlpha),
   };
+};
+
+const touchRipples = [];
+
+const spawnTouchRipple = (x, y, intensity = 1) => {
+  if (state.reducedMotion) return;
+  const count = Math.floor((24 + Math.random() * 16) * intensity);
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.48;
+    const speed = (1.4 + Math.random() * 4.8) * intensity;
+    touchRipples.push({
+      x,
+      y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1,
+      decay: 0.021 + Math.random() * 0.024,
+      size: 1.1 + Math.random() * 3.2,
+      color: Math.random() > 0.72 ? "111, 255, 224" : "57, 255, 136",
+    });
+  }
+  touchRipples.push({
+    ring: true,
+    x,
+    y,
+    r: 0,
+    maxR: (82 + Math.random() * 78) * intensity,
+    life: 1,
+    decay: 0.028,
+  });
 };
 
 const isWindows = () => /Win/i.test(window.navigator.platform || window.navigator.userAgent || "");
@@ -589,6 +623,8 @@ const setupFlowCanvas = () => {
     lastFrame = time;
     context.clearRect(0, 0, width, height);
     const motion = state.reducedMotion ? 0.14 : 1;
+    state.touchForce += (state.targetTouchForce - state.touchForce) * 0.1;
+    state.targetTouchForce *= 0.94;
 
     // Story phase drives sphere behavior as user scrolls through sections
     const story = getSphereStory(state.scroll);
@@ -598,12 +634,30 @@ const setupFlowCanvas = () => {
     drawBeam(time * motion, 0.42, state.reducedMotion ? 0.032 : beamA * 0.69);
     drawBeam(time * motion, 0.72, state.reducedMotion ? 0.026 : beamA * 0.56);
 
-    const sphereSize = Math.min(width, height) * (width < 820 ? 1.02 : 0.92);
-    const sphereX = width * (width < 820 ? 0.58 : 0.67) + (state.mouseX / width - 0.5) * 78;
-    const sphereY = height * 0.42 + (state.mouseY / height - 0.5) * 52 + state.scroll * 58;
-    const rotation = time * 0.00028 * motion * story.rotMult + state.scroll * 1.45 * motion;
-    const tilt = -0.34 + Math.sin(time * 0.00022 * motion) * 0.11 * motion;
-    const speechPulse = 1 + Math.sin(time * 0.0019 * story.pulseFreq * motion) * 0.055 * story.dotBoost * motion + Math.max(0, state.scrollVelocity) * 0.0012 * motion;
+    const touchNormX = width ? state.touchX / width - 0.5 : 0;
+    const touchNormY = height ? state.touchY / height - 0.5 : 0;
+    const touchDrive = state.touchForce * motion;
+    const sphereSize = Math.min(width, height) * (width < 820 ? 1.02 + touchDrive * 0.09 : 0.92);
+    const sphereX = width * (width < 820 ? 0.58 : 0.67)
+      + (state.mouseX / width - 0.5) * 78
+      + touchNormX * 118 * touchDrive;
+    const floorY = height * (width < 820 ? 0.78 : 0.82);
+    const bounce = Math.max(0, Math.sin(time * 0.005 + state.scroll * 9)) * 26 * touchDrive;
+    const sphereY = height * 0.42
+      + (state.mouseY / height - 0.5) * 52
+      + state.scroll * 58
+      + touchNormY * 84 * touchDrive
+      - bounce;
+    const rotation = time * 0.00028 * motion * story.rotMult
+      + state.scroll * 1.45 * motion
+      + touchDrive * 1.35;
+    const tilt = -0.34
+      + Math.sin(time * 0.00022 * motion) * 0.11 * motion
+      + touchNormX * 0.32 * touchDrive;
+    const speechPulse = 1
+      + Math.sin(time * 0.0019 * story.pulseFreq * motion) * 0.055 * story.dotBoost * motion
+      + Math.max(0, state.scrollVelocity) * 0.0012 * motion
+      + touchDrive * 0.12;
 
     context.save();
     context.globalCompositeOperation = "lighter";
@@ -637,8 +691,16 @@ const setupFlowCanvas = () => {
       const depth = (tiltedZ + 1.55) / 3.1;
       if (depth < 0.04) return;
       const scale = sphereSize * (0.38 + depth * 0.17);
-      const x = sphereX + rotatedX * scale;
-      const y = sphereY + tiltedY * scale;
+      let x = sphereX + rotatedX * scale;
+      let y = sphereY + tiltedY * scale;
+      if (touchDrive > 0.01) {
+        const dx = x - state.touchX;
+        const dy = y - state.touchY;
+        const dist = Math.max(24, Math.hypot(dx, dy));
+        const push = Math.max(0, 1 - dist / 220) * 30 * touchDrive;
+        x += (dx / dist) * push;
+        y += (dy / dist) * push;
+      }
       const alpha = 0.09 + depth * 0.56 + Math.sin(time * 0.004 * motion + dot.phase) * 0.06 * motion;
       const radius = dot.size * (0.75 + depth * 2.15);
 
@@ -654,6 +716,39 @@ const setupFlowCanvas = () => {
         context.fill();
       }
     });
+    context.restore();
+
+    const floorGradient = context.createLinearGradient(0, floorY - 56, 0, height);
+    floorGradient.addColorStop(0, `rgba(185, 255, 205, ${(0.025 + touchDrive * 0.08).toFixed(3)})`);
+    floorGradient.addColorStop(0.34, `rgba(57, 255, 136, ${(0.06 + touchDrive * 0.14).toFixed(3)})`);
+    floorGradient.addColorStop(1, "transparent");
+    context.save();
+    context.globalCompositeOperation = "lighter";
+    context.fillStyle = floorGradient;
+    context.beginPath();
+    context.moveTo(0, floorY);
+    context.quadraticCurveTo(width * 0.5, floorY - 34 - touchDrive * 28, width, floorY + 8);
+    context.lineTo(width, height);
+    context.lineTo(0, height);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = `rgba(185, 255, 205, ${(0.16 + touchDrive * 0.28).toFixed(3)})`;
+    context.lineWidth = 1.5 + touchDrive * 2.5;
+    context.beginPath();
+    context.moveTo(0, floorY);
+    context.quadraticCurveTo(width * 0.5, floorY - 34 - touchDrive * 28, width, floorY + 8);
+    context.stroke();
+    context.globalAlpha = 0.16 + touchDrive * 0.18;
+    context.translate(sphereX, floorY + 28);
+    context.scale(1, 0.18);
+    const reflection = context.createRadialGradient(0, 0, 0, 0, 0, sphereSize * 0.5);
+    reflection.addColorStop(0, "rgba(185, 255, 205, 0.45)");
+    reflection.addColorStop(0.46, "rgba(57, 255, 136, 0.16)");
+    reflection.addColorStop(1, "transparent");
+    context.fillStyle = reflection;
+    context.beginPath();
+    context.arc(0, 0, sphereSize * 0.5, 0, Math.PI * 2);
+    context.fill();
     context.restore();
 
     context.strokeStyle = "rgba(57, 255, 136, 0.055)";
@@ -697,6 +792,43 @@ const setupFlowCanvas = () => {
       context.fill();
     });
 
+    for (let i = touchRipples.length - 1; i >= 0; i--) {
+      const ripple = touchRipples[i];
+      if (ripple.ring) {
+        ripple.r += (ripple.maxR - ripple.r) * 0.13;
+        ripple.life -= ripple.decay;
+        if (ripple.life <= 0) {
+          touchRipples.splice(i, 1);
+          continue;
+        }
+        context.save();
+        context.globalCompositeOperation = "lighter";
+        context.strokeStyle = `rgba(57, 255, 136, ${ripple.life * 0.6})`;
+        context.lineWidth = Math.max(1, 2.4 * ripple.life);
+        context.beginPath();
+        context.arc(ripple.x, ripple.y, ripple.r, 0, Math.PI * 2);
+        context.stroke();
+        context.restore();
+      } else {
+        ripple.x += ripple.vx;
+        ripple.y += ripple.vy;
+        ripple.vx *= 0.94;
+        ripple.vy = ripple.vy * 0.94 + 0.015;
+        ripple.life -= ripple.decay;
+        if (ripple.life <= 0) {
+          touchRipples.splice(i, 1);
+          continue;
+        }
+        context.save();
+        context.globalCompositeOperation = "lighter";
+        context.fillStyle = `rgba(${ripple.color}, ${ripple.life * 0.86})`;
+        context.beginPath();
+        context.arc(ripple.x, ripple.y, Math.max(0.4, ripple.size * ripple.life), 0, Math.PI * 2);
+        context.fill();
+        context.restore();
+      }
+    }
+
     requestAnimationFrame(draw);
   };
 
@@ -708,79 +840,48 @@ const setupFlowCanvas = () => {
   requestAnimationFrame(draw);
 };
 
-// Mobile touch ripples — flash a burst of light where the user taps
-const touchRipples = [];
-
 const setupTouchRipple = () => {
   if (state.reducedMotion) return;
   const canvas = document.querySelector("[data-flow-canvas]");
   if (!(canvas instanceof HTMLCanvasElement)) return;
-  const context = canvas.getContext("2d", { alpha: true });
-  if (!context) return;
 
-  const spawnRipple = (x, y) => {
-    const count = 28 + Math.floor(Math.random() * 18);
-    for (let i = 0; i < count; i++) {
-      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.4;
-      const speed = 1.8 + Math.random() * 4.2;
-      touchRipples.push({
-        x,
-        y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        life: 1,
-        decay: 0.022 + Math.random() * 0.028,
-        size: 1.2 + Math.random() * 2.8,
-        color: Math.random() > 0.7 ? "111, 255, 224" : "57, 255, 136",
-      });
-    }
-    // Ring flash
-    touchRipples.push({ ring: true, x, y, r: 0, maxR: 90 + Math.random() * 60, life: 1, decay: 0.034 });
+  let lastBurst = 0;
+  const setTouchTarget = (clientX, clientY, force = 1) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    state.touchX = x;
+    state.touchY = y;
+    state.targetTouchForce = Math.min(1.45, Math.max(state.targetTouchForce, force));
+    state.targetMouseX = clientX;
+    state.targetMouseY = clientY;
+    state.mouseX += (clientX - state.mouseX) * 0.34;
+    state.mouseY += (clientY - state.mouseY) * 0.34;
   };
 
-  canvas.addEventListener("touchstart", (e) => {
+  window.addEventListener("touchstart", (e) => {
     if (state.reducedMotion) return;
     Array.from(e.changedTouches).forEach((t) => {
-      const rect = canvas.getBoundingClientRect();
-      spawnRipple(t.clientX - rect.left, t.clientY - rect.top);
+      setTouchTarget(t.clientX, t.clientY, 1.15);
+      spawnTouchRipple(state.touchX, state.touchY, 1.15);
     });
   }, { passive: true });
 
-  // Draw ripples each frame — injected into the existing draw loop via a shared array
-  const drawRipples = () => {
-    for (let i = touchRipples.length - 1; i >= 0; i--) {
-      const r = touchRipples[i];
-      if (r.ring) {
-        r.r += (r.maxR - r.r) * 0.12;
-        r.life -= r.decay;
-        if (r.life <= 0) { touchRipples.splice(i, 1); continue; }
-        context.save();
-        context.globalCompositeOperation = "lighter";
-        context.strokeStyle = `rgba(57, 255, 136, ${r.life * 0.55})`;
-        context.lineWidth = 2 * r.life;
-        context.beginPath();
-        context.arc(r.x, r.y, r.r, 0, Math.PI * 2);
-        context.stroke();
-        context.restore();
-      } else {
-        r.x += r.vx;
-        r.y += r.vy;
-        r.vx *= 0.94;
-        r.vy *= 0.94;
-        r.life -= r.decay;
-        if (r.life <= 0) { touchRipples.splice(i, 1); continue; }
-        context.save();
-        context.globalCompositeOperation = "lighter";
-        context.fillStyle = `rgba(${r.color}, ${r.life * 0.85})`;
-        context.beginPath();
-        context.arc(r.x, r.y, r.size * r.life, 0, Math.PI * 2);
-        context.fill();
-        context.restore();
-      }
+  window.addEventListener("touchmove", (e) => {
+    if (state.reducedMotion) return;
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+    setTouchTarget(touch.clientX, touch.clientY, 0.9);
+    const now = performance.now();
+    if (now - lastBurst > 95) {
+      lastBurst = now;
+      spawnTouchRipple(state.touchX, state.touchY, 0.62);
     }
-    requestAnimationFrame(drawRipples);
-  };
-  requestAnimationFrame(drawRipples);
+  }, { passive: true });
+
+  window.addEventListener("touchend", () => {
+    state.targetTouchForce = Math.max(state.targetTouchForce, 0.28);
+  }, { passive: true });
 };
 
 // Device orientation — tilt phone to orbit the sphere (replaces mouse on mobile)

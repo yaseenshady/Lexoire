@@ -135,7 +135,7 @@ class CopilotService {
       const sessionId = this.sessionIdsByWorkspaceSession.get(workspaceSessionId)
         || (workspaceSessionId === 'master' ? this.masterSessionId : undefined);
       if (sessionId) {
-        args.push(`--resume=${sessionId}`);
+        args.push('--resume', sessionId);
       }
 
       // The prompt
