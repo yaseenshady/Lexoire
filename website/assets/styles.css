@@ -200,6 +200,28 @@ button {
   will-change: transform;
 }
 
+/* Sphere story phase label — floating, mobile-only */
+.sphere-story-label {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  pointer-events: none;
+  color: var(--green);
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  text-shadow:
+    0 0 12px rgba(57, 255, 136, 0.9),
+    0 0 28px rgba(57, 255, 136, 0.4);
+  opacity: 0;
+  display: none;
+  white-space: nowrap;
+  transition: opacity 320ms ease;
+}
+
 html.has-custom-cursor body {
   cursor: none;
 }
@@ -2174,6 +2196,59 @@ html.glass-effects-fallback .install-button {
   .terminal-actions a:nth-child(1) { animation-delay: 180ms; }
   .terminal-actions a:nth-child(2) { animation-delay: 280ms; }
   .terminal-actions a:nth-child(3) { animation-delay: 380ms; }
+
+  /* ── Scroll story label ───────────────────────────── */
+  .sphere-story-label {
+    display: block;
+    opacity: 0.68;
+  }
+
+  .sphere-story-label.is-entering {
+    animation: storyLabelFlash 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  /* ── Text visibility against animated background ──── */
+
+  /* Hero body copy — heavier dark base shadow */
+  .hero-copy {
+    text-shadow:
+      0 1px 0 #000,
+      0 0 22px rgba(0, 0, 0, 0.96),
+      0 0 40px rgba(0, 0, 0, 0.82),
+      0 0 20px rgba(57, 255, 136, 0.14);
+  }
+
+  /* Section headings — add solid dark base (they only had a green glow before) */
+  .distort-heading {
+    text-shadow:
+      0 2px 0 rgba(0, 0, 0, 0.9),
+      0 0 28px rgba(0, 0, 0, 0.88),
+      0 0 48px rgba(57, 255, 136, 0.22);
+  }
+
+  /* Eyebrow labels */
+  .eyebrow {
+    text-shadow:
+      0 1px 0 rgba(0, 0, 0, 0.9),
+      0 0 16px rgba(57, 255, 136, 0.45);
+  }
+
+  /* Terminal lines — stronger dark base, keeps legible against sphere glow */
+  .terminal-line {
+    text-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.95),
+      0 0 20px rgba(0, 0, 0, 0.88),
+      0 0 18px rgba(57, 255, 136, 0.12);
+  }
+
+  /* Flow-script / system-grid panels: semi-transparent dark scrim behind text blocks */
+  .flow-script,
+  .system-grid {
+    position: relative;
+    padding: 20px 18px;
+    background: rgba(0, 4, 2, 0.46);
+    border-left: 1px solid rgba(57, 255, 136, 0.12);
+  }
 }
 
 @keyframes mobileGlitchPulse {
@@ -2227,6 +2302,13 @@ html.glass-effects-fallback .install-button {
     transform: translateY(0) scale(1);
     filter: brightness(1);
   }
+}
+
+@keyframes storyLabelFlash {
+  0%   { opacity: 0; transform: translateX(-50%) scale(0.82); filter: brightness(3) blur(4px); }
+  22%  { opacity: 1; filter: brightness(1.6) blur(0); }
+  70%  { opacity: 0.76; transform: translateX(-50%) scale(1.02); }
+  100% { opacity: 0.68; transform: translateX(-50%) scale(1); filter: brightness(1); }
 }
 
 @media (max-width: 440px) {

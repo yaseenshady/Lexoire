@@ -18,6 +18,48 @@ const RELEASES_API_URL = "https://api.github.com/repos/yaseensh/Lexoire/releases
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
+// Sphere story — scroll 0→1 drives through homepage sections
+// Each phase is keyed to a rough scroll depth. Interpolation is smooth-stepped.
+const SPHERE_STORY = [
+  // Hero: sphere rests, calm glow
+  { at: 0.00, label: "IDLE",    rotMult: 1.0, glowAlpha: 0.24, dotBoost: 1.00, pulseFreq: 1.0,  beamAlpha: 0.075 },
+  // Problem section: sphere wakes, brightens — "capture the signal"
+  { at: 0.18, label: "CAPTURE", rotMult: 1.7, glowAlpha: 0.36, dotBoost: 1.20, pulseFreq: 1.55, beamAlpha: 0.11  },
+  // Install section: sphere spins, beams shift — "routing begins"
+  { at: 0.38, label: "ROUTE",   rotMult: 2.6, glowAlpha: 0.46, dotBoost: 1.40, pulseFreq: 2.10, beamAlpha: 0.15  },
+  // How it works: peak activity — "processing your intent"
+  { at: 0.56, label: "PROCESS", rotMult: 3.2, glowAlpha: 0.58, dotBoost: 1.60, pulseFreq: 3.00, beamAlpha: 0.19  },
+  // Open source CTA: calms, sphere solidifies — "context persists"
+  { at: 0.74, label: "PERSIST", rotMult: 1.6, glowAlpha: 0.70, dotBoost: 1.25, pulseFreq: 1.30, beamAlpha: 0.15  },
+  // Visual system: sphere at peak luminosity — "online"
+  { at: 0.90, label: "ONLINE",  rotMult: 1.2, glowAlpha: 0.84, dotBoost: 1.08, pulseFreq: 1.00, beamAlpha: 0.12  },
+  { at: 1.00, label: "ONLINE",  rotMult: 1.2, glowAlpha: 0.84, dotBoost: 1.08, pulseFreq: 1.00, beamAlpha: 0.12  },
+];
+
+const getSphereStory = (scroll) => {
+  let lo = SPHERE_STORY[0];
+  let hi = SPHERE_STORY[SPHERE_STORY.length - 1];
+  for (let i = 0; i < SPHERE_STORY.length - 1; i++) {
+    if (scroll >= SPHERE_STORY[i].at && scroll <= SPHERE_STORY[i + 1].at) {
+      lo = SPHERE_STORY[i];
+      hi = SPHERE_STORY[i + 1];
+      break;
+    }
+  }
+  const range = hi.at - lo.at;
+  const t = range <= 0 ? 0 : clamp((scroll - lo.at) / range, 0, 1);
+  const ease = t * t * (3 - 2 * t); // smoothstep
+  const lerp = (a, b) => a + (b - a) * ease;
+  return {
+    label: ease > 0.5 ? hi.label : lo.label,
+    rotMult: lerp(lo.rotMult, hi.rotMult),
+    glowAlpha: lerp(lo.glowAlpha, hi.glowAlpha),
+    dotBoost: lerp(lo.dotBoost, hi.dotBoost),
+    pulseFreq: lerp(lo.pulseFreq, hi.pulseFreq),
+    beamAlpha: lerp(lo.beamAlpha, hi.beamAlpha),
+  };
+};
+
 const isWindows = () => /Win/i.test(window.navigator.platform || window.navigator.userAgent || "");
 
 const readMotionPreference = () => {
@@ -548,24 +590,29 @@ const setupFlowCanvas = () => {
     context.clearRect(0, 0, width, height);
     const motion = state.reducedMotion ? 0.14 : 1;
 
-    drawBeam(time * motion, 0.05, state.reducedMotion ? 0.042 : 0.075);
-    drawBeam(time * motion, 0.42, state.reducedMotion ? 0.032 : 0.052);
-    drawBeam(time * motion, 0.72, state.reducedMotion ? 0.026 : 0.042);
+    // Story phase drives sphere behavior as user scrolls through sections
+    const story = getSphereStory(state.scroll);
+    const beamA = story.beamAlpha;
+
+    drawBeam(time * motion, 0.05, state.reducedMotion ? 0.042 : beamA);
+    drawBeam(time * motion, 0.42, state.reducedMotion ? 0.032 : beamA * 0.69);
+    drawBeam(time * motion, 0.72, state.reducedMotion ? 0.026 : beamA * 0.56);
 
     const sphereSize = Math.min(width, height) * (width < 820 ? 1.02 : 0.92);
     const sphereX = width * (width < 820 ? 0.58 : 0.67) + (state.mouseX / width - 0.5) * 78;
     const sphereY = height * 0.42 + (state.mouseY / height - 0.5) * 52 + state.scroll * 58;
-    const rotation = time * 0.00028 * motion + state.scroll * 1.45 * motion;
+    const rotation = time * 0.00028 * motion * story.rotMult + state.scroll * 1.45 * motion;
     const tilt = -0.34 + Math.sin(time * 0.00022 * motion) * 0.11 * motion;
-    const speechPulse = 1 + Math.sin(time * 0.0019 * motion) * 0.055 * motion + Math.max(0, state.scrollVelocity) * 0.0012 * motion;
+    const speechPulse = 1 + Math.sin(time * 0.0019 * story.pulseFreq * motion) * 0.055 * story.dotBoost * motion + Math.max(0, state.scrollVelocity) * 0.0012 * motion;
 
     context.save();
     context.globalCompositeOperation = "lighter";
 
+    const ga = story.glowAlpha;
     const sphereGradient = context.createRadialGradient(sphereX, sphereY, 0, sphereX, sphereY, sphereSize * 0.78);
-    sphereGradient.addColorStop(0, "rgba(57, 255, 136, 0.24)");
-    sphereGradient.addColorStop(0.32, "rgba(57, 255, 136, 0.095)");
-    sphereGradient.addColorStop(0.7, "rgba(57, 255, 136, 0.038)");
+    sphereGradient.addColorStop(0, `rgba(57, 255, 136, ${ga})`);
+    sphereGradient.addColorStop(0.32, `rgba(57, 255, 136, ${(ga * 0.395).toFixed(3)})`);
+    sphereGradient.addColorStop(0.7, `rgba(57, 255, 136, ${(ga * 0.158).toFixed(3)})`);
     sphereGradient.addColorStop(1, "transparent");
     context.fillStyle = sphereGradient;
     context.beginPath();
@@ -779,6 +826,30 @@ const setupDeviceOrientation = () => {
   }
 };
 
+// Scroll story label — updates the floating phase name on mobile as user scrolls
+const setupScrollStory = () => {
+  const el = document.querySelector("[data-story-label]");
+  if (!el || state.reducedMotion) return;
+  // Only active on touch/mobile
+  if (!window.matchMedia("(max-width: 820px)").matches) return;
+
+  let lastLabel = "";
+  let raf = 0;
+  const tick = () => {
+    raf = requestAnimationFrame(tick);
+    const story = getSphereStory(state.scroll);
+    if (story.label !== lastLabel) {
+      lastLabel = story.label;
+      el.textContent = story.label;
+      el.classList.remove("is-entering");
+      // force reflow so animation restarts cleanly
+      void el.offsetWidth;
+      el.classList.add("is-entering");
+    }
+  };
+  raf = requestAnimationFrame(tick);
+};
+
 document.addEventListener("DOMContentLoaded", () => {
   state.reducedMotion = readMotionPreference();
   setupEffectFallbacks();
@@ -796,4 +867,5 @@ document.addEventListener("DOMContentLoaded", () => {
   setupFlowCanvas();
   setupTouchRipple();
   setupDeviceOrientation();
+  setupScrollStory();
 });
