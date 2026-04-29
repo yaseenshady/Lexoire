@@ -1934,34 +1934,39 @@ html.glass-effects-fallback .install-button {
   }
 
   body::before {
-    filter: blur(14px);
-    opacity: calc(0.52 + var(--scroll-react) * 0.22);
+    filter: blur(10px);
+    opacity: calc(0.82 + var(--scroll-react) * 0.52);
+    animation-duration: 10s;
   }
 
   .matrix-canvas {
-    opacity: 0.055;
+    opacity: 0.18;
   }
 
   .flow-canvas {
-    opacity: calc(var(--sphere-opacity) * 0.86);
+    opacity: calc(var(--sphere-opacity) * 1.1);
   }
 
   .sphere-focus {
-    opacity: calc(var(--sphere-opacity) * 0.62);
-    animation-duration: 7.5s;
+    opacity: calc(var(--sphere-opacity) * 1.1);
+    animation-duration: 3.5s;
+    background:
+      radial-gradient(circle at 58% 43%, rgba(57, 255, 136, 0.28), rgba(57, 255, 136, 0.09) 18rem, transparent 28rem),
+      radial-gradient(circle at 58% 43%, rgba(185, 255, 205, 0.18), transparent 12rem);
   }
 
   .crt-noise {
-    opacity: 0.055;
+    opacity: 0.12;
   }
 
   .scan-sweep {
-    animation-duration: 11s;
+    animation-duration: 5s;
+    opacity: 0.7;
   }
 
   .vertical-energy-bar {
-    opacity: 0.34;
-    animation-duration: 8.5s;
+    opacity: 0.72;
+    animation-duration: 4s;
   }
 
   .cursor-glow {
@@ -2093,6 +2098,111 @@ html.glass-effects-fallback .install-button {
 
   .article-next {
     display: grid;
+  }
+
+  /* Mobile: hero title gets a continuous glitch pulse */
+  .glitch-title {
+    animation: mobileGlitchPulse 2.8s ease-in-out infinite alternate;
+    text-shadow:
+      0 0 24px rgba(57, 255, 136, 0.52),
+      0 0 80px rgba(57, 255, 136, 0.22);
+  }
+
+  .glitch-title::before {
+    animation: mobileEdgeL 1.9s ease-in-out infinite alternate;
+    opacity: 0.38;
+  }
+
+  .glitch-title::after {
+    animation: mobileEdgeR 2.3s ease-in-out infinite alternate;
+    opacity: 0.32;
+  }
+
+  /* Install buttons: pop on touch */
+  .install-button:active {
+    transform: scale(0.96);
+    box-shadow: 0 0 36px rgba(57, 255, 136, 0.52), 0 0 80px rgba(57, 255, 136, 0.22);
+    transition: transform 80ms ease, box-shadow 80ms ease;
+  }
+
+  /* Nav links: flash green on tap */
+  .site-nav__links a:active {
+    color: var(--green);
+    text-shadow: 0 0 18px rgba(57, 255, 136, 0.72);
+  }
+
+  /* Terminal lines: scale in faster on mobile */
+  .terminal-line {
+    transition: opacity 240ms ease, transform 240ms ease;
+  }
+
+  /* Eyebrow line shoots out further */
+  .eyebrow.is-visible::after,
+  .hero-kicker.is-visible::after {
+    width: min(320px, 80vw);
+    transition: width 700ms cubic-bezier(0.2, 0.8, 0.2, 1) 80ms;
+  }
+
+  /* Terminal actions: stagger pop-in */
+  .terminal-actions a {
+    animation: mobileLinkPop 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .terminal-actions a:nth-child(1) { animation-delay: 180ms; }
+  .terminal-actions a:nth-child(2) { animation-delay: 280ms; }
+  .terminal-actions a:nth-child(3) { animation-delay: 380ms; }
+}
+
+@keyframes mobileGlitchPulse {
+  0% {
+    text-shadow:
+      0 0 18px rgba(57, 255, 136, 0.38),
+      0 0 48px rgba(57, 255, 136, 0.14);
+    filter: none;
+  }
+  30% {
+    text-shadow:
+      2px 0 18px rgba(57, 255, 136, 0.52),
+      -2px 0 18px rgba(111, 255, 224, 0.38),
+      0 0 72px rgba(57, 255, 136, 0.28);
+    filter: brightness(1.12);
+  }
+  60% {
+    text-shadow:
+      -3px 0 22px rgba(57, 255, 136, 0.28),
+      3px 0 22px rgba(248, 223, 114, 0.18);
+    filter: brightness(1.06) hue-rotate(6deg);
+  }
+  100% {
+    text-shadow:
+      0 0 32px rgba(57, 255, 136, 0.55),
+      0 0 90px rgba(57, 255, 136, 0.2);
+    filter: brightness(1.08);
+  }
+}
+
+@keyframes mobileEdgeL {
+  0% { opacity: 0; transform: translateX(0); }
+  40% { opacity: 0.42; transform: translateX(-4px); }
+  100% { opacity: 0.22; transform: translateX(-2px); }
+}
+
+@keyframes mobileEdgeR {
+  0% { opacity: 0; transform: translateX(0); }
+  50% { opacity: 0.36; transform: translateX(5px); }
+  100% { opacity: 0.18; transform: translateX(3px); }
+}
+
+@keyframes mobileLinkPop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.94);
+    filter: brightness(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: brightness(1);
   }
 }
 

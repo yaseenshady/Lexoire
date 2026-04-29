@@ -60,7 +60,8 @@ const getAnimationProfile = () => {
   }
 
   if (width < 640) {
-    return { dpr: 1, matrixFps: 16, flowFps: 30, sphereDots: 520, particles: 22, circuits: 5, gridStep: 72 };
+    // Mobile: full-blast — more dots, more particles, faster FPS, tighter grid
+    return { dpr: Math.min(dpr, 2), matrixFps: 28, flowFps: 60, sphereDots: 1600, particles: 72, circuits: 14, gridStep: 44 };
   }
 
   if (width < 1024) {
@@ -660,6 +661,124 @@ const setupFlowCanvas = () => {
   requestAnimationFrame(draw);
 };
 
+// Mobile touch ripples — flash a burst of light where the user taps
+const touchRipples = [];
+
+const setupTouchRipple = () => {
+  if (state.reducedMotion) return;
+  const canvas = document.querySelector("[data-flow-canvas]");
+  if (!(canvas instanceof HTMLCanvasElement)) return;
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) return;
+
+  const spawnRipple = (x, y) => {
+    const count = 28 + Math.floor(Math.random() * 18);
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.4;
+      const speed = 1.8 + Math.random() * 4.2;
+      touchRipples.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 1,
+        decay: 0.022 + Math.random() * 0.028,
+        size: 1.2 + Math.random() * 2.8,
+        color: Math.random() > 0.7 ? "111, 255, 224" : "57, 255, 136",
+      });
+    }
+    // Ring flash
+    touchRipples.push({ ring: true, x, y, r: 0, maxR: 90 + Math.random() * 60, life: 1, decay: 0.034 });
+  };
+
+  canvas.addEventListener("touchstart", (e) => {
+    if (state.reducedMotion) return;
+    Array.from(e.changedTouches).forEach((t) => {
+      const rect = canvas.getBoundingClientRect();
+      spawnRipple(t.clientX - rect.left, t.clientY - rect.top);
+    });
+  }, { passive: true });
+
+  // Draw ripples each frame — injected into the existing draw loop via a shared array
+  const drawRipples = () => {
+    for (let i = touchRipples.length - 1; i >= 0; i--) {
+      const r = touchRipples[i];
+      if (r.ring) {
+        r.r += (r.maxR - r.r) * 0.12;
+        r.life -= r.decay;
+        if (r.life <= 0) { touchRipples.splice(i, 1); continue; }
+        context.save();
+        context.globalCompositeOperation = "lighter";
+        context.strokeStyle = `rgba(57, 255, 136, ${r.life * 0.55})`;
+        context.lineWidth = 2 * r.life;
+        context.beginPath();
+        context.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+        context.stroke();
+        context.restore();
+      } else {
+        r.x += r.vx;
+        r.y += r.vy;
+        r.vx *= 0.94;
+        r.vy *= 0.94;
+        r.life -= r.decay;
+        if (r.life <= 0) { touchRipples.splice(i, 1); continue; }
+        context.save();
+        context.globalCompositeOperation = "lighter";
+        context.fillStyle = `rgba(${r.color}, ${r.life * 0.85})`;
+        context.beginPath();
+        context.arc(r.x, r.y, r.size * r.life, 0, Math.PI * 2);
+        context.fill();
+        context.restore();
+      }
+    }
+    requestAnimationFrame(drawRipples);
+  };
+  requestAnimationFrame(drawRipples);
+};
+
+// Device orientation — tilt phone to orbit the sphere (replaces mouse on mobile)
+const setupDeviceOrientation = () => {
+  if (state.reducedMotion || typeof DeviceOrientationEvent === "undefined") return;
+  if (window.matchMedia && !window.matchMedia("(pointer: coarse)").matches) return;
+
+  const root = document.documentElement;
+  let calibrated = false;
+  let baseGamma = 0;
+  let baseBeta = 0;
+
+  const activate = () => {
+    window.addEventListener("deviceorientation", (e) => {
+      if (!calibrated) {
+        baseGamma = e.gamma || 0;
+        baseBeta = e.beta || 0;
+        calibrated = true;
+      }
+      const tiltX = clamp(((e.gamma || 0) - baseGamma) / 35, -1, 1);
+      const tiltY = clamp(((e.beta || 0) - baseBeta) / 35, -1, 1);
+      const mx = (0.5 + tiltX * 0.5) * window.innerWidth;
+      const my = (0.5 + tiltY * 0.5) * window.innerHeight;
+      state.targetMouseX = mx;
+      state.targetMouseY = my;
+      state.mouseX += (mx - state.mouseX) * 0.08;
+      state.mouseY += (my - state.mouseY) * 0.08;
+      root.style.setProperty("--mouse-x", `${state.mouseX.toFixed(1)}px`);
+      root.style.setProperty("--mouse-y", `${state.mouseY.toFixed(1)}px`);
+    }, { passive: true });
+  };
+
+  // iOS 13+ requires permission request on user gesture
+  if (typeof DeviceOrientationEvent.requestPermission === "function") {
+    document.addEventListener("touchend", function askOnce() {
+      DeviceOrientationEvent.requestPermission().then((r) => {
+        if (r === "granted") activate();
+      }).catch(() => {});
+      document.removeEventListener("touchend", askOnce);
+    }, { once: true });
+  } else {
+    activate();
+  }
+};
+
 document.addEventListener("DOMContentLoaded", () => {
   state.reducedMotion = readMotionPreference();
   setupEffectFallbacks();
@@ -675,4 +794,6 @@ document.addEventListener("DOMContentLoaded", () => {
   setupScrollReaction();
   setupMatrixCanvas();
   setupFlowCanvas();
+  setupTouchRipple();
+  setupDeviceOrientation();
 });
