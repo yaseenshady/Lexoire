@@ -144,6 +144,14 @@ function clearProviderCliSessionId(workspaceId: string, metadataKey: string): vo
   }
 }
 
+function resolveAgentWorkspaceSession(sessionId?: string): Session | null {
+  if (sessionId) {
+    return sessionManager.getSession(sessionId);
+  }
+
+  return sessionManager.getPreferredRestoreSession();
+}
+
 // Restore provider CLI session IDs from DB so --resume survives server restarts
 copilotService.initFromSessions(sessionManager.listSessions());
 copilotService.setPersistence(
@@ -1248,8 +1256,12 @@ type CopilotPromptJob = {
   requestId?: string;
 };
 
+type ClaudePromptJob = CopilotPromptJob;
+
 const copilotPromptQueue: CopilotPromptJob[] = [];
+const claudePromptQueue: ClaudePromptJob[] = [];
 let copilotPromptWorkerRunning = false;
+let claudePromptWorkerRunning = false;
 const AGENT_HEARTBEAT_MS = 12000;
 
 function startAgentHeartbeat(socket: any, provider: 'copilot' | 'claude' | 'codex', requestId?: string, sessionId?: string) {
@@ -1268,12 +1280,13 @@ function startAgentHeartbeat(socket: any, provider: 'copilot' | 'claude' | 'code
 
 async function processCopilotPromptJob(job: CopilotPromptJob): Promise<void> {
   const { socket, prompt, sessionId: sid, requestId } = job;
-  logger.copilot(`Starting queued prompt. session=${sid || 'none'} prompt="${prompt.slice(0, 120)}" queueRemaining=${copilotPromptQueue.length}`);
-  socket.emit('agent:status', { provider: 'copilot', phase: 'start', detail: prompt.slice(0, 80), requestId, sessionId: sid });
+  const session = resolveAgentWorkspaceSession(sid);
+  const resolvedSessionId = session?.id || sid;
+  logger.copilot(`Starting queued prompt. session=${resolvedSessionId || 'none'} prompt="${prompt.slice(0, 120)}" queueRemaining=${copilotPromptQueue.length}`);
+  socket.emit('agent:status', { provider: 'copilot', phase: 'start', detail: prompt.slice(0, 80), requestId, sessionId: resolvedSessionId });
   let chunkCount = 0;
-  const session = sid ? sessionManager.getSession(sid) : null;
   const effectivePrompt = session ? buildProviderPrompt(session, 'copilot', prompt) : prompt;
-  const stopHeartbeat = startAgentHeartbeat(socket, 'copilot', requestId, sid);
+  const stopHeartbeat = startAgentHeartbeat(socket, 'copilot', requestId, resolvedSessionId);
   try {
     if (session) ensureSessionContext(session);
     const response = await copilotService.execute(
@@ -1281,13 +1294,13 @@ async function processCopilotPromptJob(job: CopilotPromptJob): Promise<void> {
       (chunk, type) => {
         chunkCount++;
         logger.copilot(`Chunk ${chunkCount} (${type}) ${chunk.length} chars`);
-        socket.emit('agent:status', { provider: 'copilot', phase: 'chunk', detail: `${chunk.length} chars`, requestId, sessionId: sid });
-        socket.emit('command:chunk', { chunk, requestId, sessionId: sid });
+        socket.emit('agent:status', { provider: 'copilot', phase: 'chunk', detail: `${chunk.length} chars`, requestId, sessionId: resolvedSessionId });
+        socket.emit('command:chunk', { chunk, requestId, sessionId: resolvedSessionId });
       }
     );
     if (response.aborted) {
       logger.copilot(`Aborted prompt. chunks=${chunkCount}`);
-      socket.emit('agent:status', { provider: 'copilot', phase: 'aborted', detail: 'user interrupted', requestId, sessionId: sid });
+      socket.emit('agent:status', { provider: 'copilot', phase: 'aborted', detail: 'user interrupted', requestId, sessionId: resolvedSessionId });
       socket.emit('command:response', {
         result: response.output.trim() || '(interrupted)',
         sessionId: session?.id || response.sessionId,
@@ -1301,7 +1314,7 @@ async function processCopilotPromptJob(job: CopilotPromptJob): Promise<void> {
       appendSessionProgress(session, 'copilot', prompt, response.output);
     }
     logger.copilot(`Completed prompt. chunks=${chunkCount} outputLength=${response.output.length}`);
-    socket.emit('agent:status', { provider: 'copilot', phase: 'complete', detail: `${response.output.length} chars`, requestId, sessionId: sid });
+    socket.emit('agent:status', { provider: 'copilot', phase: 'complete', detail: `${response.output.length} chars`, requestId, sessionId: resolvedSessionId });
     const resultText = response.output.trim() || (response.error ? `Copilot error: ${response.error}` : '(no output)');
     socket.emit('command:response', {
       result: resultText,
@@ -1310,8 +1323,8 @@ async function processCopilotPromptJob(job: CopilotPromptJob): Promise<void> {
     });
   } catch (err: any) {
     logger.error('Copilot prompt failed:', err.message);
-    socket.emit('agent:status', { provider: 'copilot', phase: 'error', detail: err.message, requestId, sessionId: sid });
-    socket.emit('command:response', { result: `Error: ${err.message}`, requestId, sessionId: sid });
+    socket.emit('agent:status', { provider: 'copilot', phase: 'error', detail: err.message, requestId, sessionId: resolvedSessionId });
+    socket.emit('command:response', { result: `Error: ${err.message}`, requestId, sessionId: resolvedSessionId });
   } finally {
     stopHeartbeat();
   }
@@ -1327,6 +1340,58 @@ async function drainCopilotPromptQueue(): Promise<void> {
     }
   } finally {
     copilotPromptWorkerRunning = false;
+  }
+}
+
+async function processClaudePromptJob(job: ClaudePromptJob): Promise<void> {
+  const { socket, prompt, sessionId: sid, requestId } = job;
+  const session = resolveAgentWorkspaceSession(sid);
+  const resolvedSessionId = session?.id || sid;
+  const agentSession = resolvedSessionId || socket.id;
+  const effectivePrompt = session ? buildProviderPrompt(session, 'claude', prompt) : prompt;
+  console.log('[SOCKET] claude:prompt starting queued:', prompt.slice(0, 100));
+  let stopHeartbeat: (() => void) | null = null;
+  try {
+    (socket as any).emit('agent:status', { provider: 'claude', phase: 'start', detail: prompt.slice(0, 80), requestId, sessionId: resolvedSessionId });
+    stopHeartbeat = startAgentHeartbeat(socket, 'claude', requestId, resolvedSessionId);
+    if (session) ensureSessionContext(session);
+    const response = await claudeService.prompt(effectivePrompt, agentSession, (chunk) => {
+      (socket as any).emit('agent:status', { provider: 'claude', phase: 'chunk', detail: `${chunk.length} chars`, requestId, sessionId: resolvedSessionId });
+      (socket as any).emit('claude:chunk', { chunk, requestId, sessionId: resolvedSessionId });
+    });
+    if (response.aborted) {
+      (socket as any).emit('agent:status', { provider: 'claude', phase: 'aborted', detail: 'user interrupted', requestId, sessionId: resolvedSessionId });
+      (socket as any).emit('claude:response', {
+        result: response.text || '(interrupted)',
+        sessionId: resolvedSessionId,
+        requestId,
+        aborted: true,
+        suppressSpeech: true,
+      });
+      return;
+    }
+    if (session) appendSessionProgress(session, 'claude', prompt, response.text);
+    (socket as any).emit('agent:status', { provider: 'claude', phase: 'complete', detail: `${response.text.length} chars`, requestId, sessionId: resolvedSessionId });
+    (socket as any).emit('claude:response', { result: response.text || '(no output)', sessionId: resolvedSessionId, requestId });
+  } catch (err: any) {
+    console.error('[SOCKET] Claude error:', err.message);
+    (socket as any).emit('agent:status', { provider: 'claude', phase: 'error', detail: err.message, requestId, sessionId: resolvedSessionId });
+    (socket as any).emit('claude:response', { result: `Claude error: ${err.message}`, sessionId: resolvedSessionId, requestId });
+  } finally {
+    stopHeartbeat?.();
+  }
+}
+
+async function drainClaudePromptQueue(): Promise<void> {
+  if (claudePromptWorkerRunning) return;
+  claudePromptWorkerRunning = true;
+  try {
+    while (claudePromptQueue.length > 0) {
+      const job = claudePromptQueue.shift();
+      if (job) await processClaudePromptJob(job);
+    }
+  } finally {
+    claudePromptWorkerRunning = false;
   }
 }
 
@@ -1590,8 +1655,9 @@ io.on('connection', (socket) => {
 
   // ── Simple prompt handler (used by AppClean.tsx) ────────────────────────
   (socket as any).on('copilot:prompt', async ({ prompt, sessionId: sid, requestId }: { prompt: string; sessionId?: string; requestId?: string }) => {
-    logger.copilot(`Prompt received. session=${sid || 'none'} prompt="${prompt.slice(0, 120)}"`);
-    copilotPromptQueue.push({ socket, prompt, sessionId: sid, requestId });
+    const resolvedSessionId = resolveAgentWorkspaceSession(sid)?.id || sid;
+    logger.copilot(`Prompt received. session=${resolvedSessionId || 'none'} prompt="${prompt.slice(0, 120)}"`);
+    copilotPromptQueue.push({ socket, prompt, sessionId: resolvedSessionId, requestId });
     if (copilotPromptWorkerRunning || copilotService.isRunning()) {
       logger.copilot(`Prompt queued. pending=${copilotPromptQueue.length}`);
       (socket as any).emit('agent:status', {
@@ -1599,7 +1665,7 @@ io.on('connection', (socket) => {
         phase: 'queued',
         detail: `${copilotPromptQueue.length} pending`,
         requestId,
-        sessionId: sid,
+        sessionId: resolvedSessionId,
       });
     }
     void drainCopilotPromptQueue();
@@ -1644,50 +1710,21 @@ io.on('connection', (socket) => {
 
   // ── Claude prompt handler ────────────────────────────────────────────────
   (socket as any).on('claude:prompt', async ({ prompt, sessionId: sid, requestId }: { prompt: string; sessionId?: string; requestId?: string }) => {
-    const session = sid ? sessionManager.getSession(sid) : null;
-    const agentSession = session?.id || sid || socket.id;
-    const effectivePrompt = session ? buildProviderPrompt(session, 'claude', prompt) : prompt;
+    const session = resolveAgentWorkspaceSession(sid);
+    const resolvedSessionId = session?.id || sid;
+    const agentSession = resolvedSessionId || socket.id;
     console.log('[SOCKET] claude:prompt received:', prompt.slice(0, 100));
-    if (claudeService.isRunning(agentSession)) {
-      (socket as any).emit('claude:response', {
-        status: 'busy',
-        result: 'Claude is already processing this session. Start another workspace session or wait for this run to finish.',
+    claudePromptQueue.push({ socket, prompt, sessionId: resolvedSessionId, requestId });
+    if (claudePromptWorkerRunning || claudeService.isRunning(agentSession)) {
+      (socket as any).emit('agent:status', {
+        provider: 'claude',
+        phase: 'queued',
+        detail: `${claudePromptQueue.length} pending`,
         requestId,
-        sessionId: session?.id || sid,
-        suppressSpeech: true,
+        sessionId: resolvedSessionId,
       });
-      return;
     }
-    let stopHeartbeat: (() => void) | null = null;
-    try {
-      (socket as any).emit('agent:status', { provider: 'claude', phase: 'start', detail: prompt.slice(0, 80), requestId, sessionId: session?.id || sid });
-      stopHeartbeat = startAgentHeartbeat(socket, 'claude', requestId, session?.id || sid);
-      if (session) ensureSessionContext(session);
-      const response = await claudeService.prompt(effectivePrompt, agentSession, (chunk) => {
-        (socket as any).emit('agent:status', { provider: 'claude', phase: 'chunk', detail: `${chunk.length} chars`, requestId, sessionId: session?.id || sid });
-        (socket as any).emit('claude:chunk', { chunk, requestId, sessionId: session?.id || sid });
-      });
-      if (response.aborted) {
-        (socket as any).emit('agent:status', { provider: 'claude', phase: 'aborted', detail: 'user interrupted', requestId, sessionId: session?.id || sid });
-        (socket as any).emit('claude:response', {
-          result: response.text || '(interrupted)',
-          sessionId: session?.id,
-          requestId,
-          aborted: true,
-          suppressSpeech: true,
-        });
-        return;
-      }
-      if (session) appendSessionProgress(session, 'claude', prompt, response.text);
-      (socket as any).emit('agent:status', { provider: 'claude', phase: 'complete', detail: `${response.text.length} chars`, requestId, sessionId: session?.id || sid });
-      (socket as any).emit('claude:response', { result: response.text || '(no output)', sessionId: session?.id || sid, requestId });
-    } catch (err: any) {
-      console.error('[SOCKET] Claude error:', err.message);
-      (socket as any).emit('agent:status', { provider: 'claude', phase: 'error', detail: err.message, requestId, sessionId: session?.id || sid });
-      (socket as any).emit('claude:response', { result: `Claude error: ${err.message}`, sessionId: session?.id || sid, requestId });
-    } finally {
-      stopHeartbeat?.();
-    }
+    void drainClaudePromptQueue();
   });
 
   (socket as any).on('claude:abort', ({ sessionId: sid }: { sessionId?: string } = {}) => {
@@ -1702,24 +1739,25 @@ io.on('connection', (socket) => {
 
   // ── Codex prompt handler ─────────────────────────────────────────────────
   (socket as any).on('codex:prompt', async ({ prompt, sessionId: sid, requestId }: { prompt: string; sessionId?: string; requestId?: string }) => {
-    const session = sid ? sessionManager.getSession(sid) : null;
-    const agentSession = session?.id || sid || socket.id;
+    const session = resolveAgentWorkspaceSession(sid);
+    const resolvedSessionId = session?.id || sid;
+    const agentSession = resolvedSessionId || socket.id;
     const effectivePrompt = session ? buildProviderPrompt(session, 'codex', prompt) : prompt;
     console.log('[SOCKET] codex:prompt received:', prompt.slice(0, 100));
     let stopHeartbeat: (() => void) | null = null;
     try {
-      (socket as any).emit('agent:status', { provider: 'codex', phase: 'start', detail: prompt.slice(0, 80), requestId, sessionId: session?.id || sid });
-      stopHeartbeat = startAgentHeartbeat(socket, 'codex', requestId, session?.id || sid);
+      (socket as any).emit('agent:status', { provider: 'codex', phase: 'start', detail: prompt.slice(0, 80), requestId, sessionId: resolvedSessionId });
+      stopHeartbeat = startAgentHeartbeat(socket, 'codex', requestId, resolvedSessionId);
       if (session) ensureSessionContext(session);
       const response = await codexService.prompt(effectivePrompt, agentSession, (chunk) => {
-        (socket as any).emit('agent:status', { provider: 'codex', phase: 'chunk', detail: `${chunk.length} chars`, requestId, sessionId: session?.id || sid });
-        (socket as any).emit('codex:chunk', { chunk, requestId, sessionId: session?.id || sid });
+        (socket as any).emit('agent:status', { provider: 'codex', phase: 'chunk', detail: `${chunk.length} chars`, requestId, sessionId: resolvedSessionId });
+        (socket as any).emit('codex:chunk', { chunk, requestId, sessionId: resolvedSessionId });
       });
       if (response.aborted) {
-        (socket as any).emit('agent:status', { provider: 'codex', phase: 'aborted', detail: 'user interrupted', requestId, sessionId: session?.id || sid });
+        (socket as any).emit('agent:status', { provider: 'codex', phase: 'aborted', detail: 'user interrupted', requestId, sessionId: resolvedSessionId });
         (socket as any).emit('codex:response', {
           result: response.text || '(interrupted)',
-          sessionId: session?.id,
+          sessionId: resolvedSessionId,
           requestId,
           aborted: true,
           suppressSpeech: true,
@@ -1727,12 +1765,12 @@ io.on('connection', (socket) => {
         return;
       }
       if (session) appendSessionProgress(session, 'codex', prompt, response.text);
-      (socket as any).emit('agent:status', { provider: 'codex', phase: 'complete', detail: `${response.text.length} chars`, requestId, sessionId: session?.id || sid });
-      (socket as any).emit('codex:response', { result: response.text || '(no output)', sessionId: session?.id || sid, requestId });
+      (socket as any).emit('agent:status', { provider: 'codex', phase: 'complete', detail: `${response.text.length} chars`, requestId, sessionId: resolvedSessionId });
+      (socket as any).emit('codex:response', { result: response.text || '(no output)', sessionId: resolvedSessionId, requestId });
     } catch (err: any) {
       console.error('[SOCKET] Codex error:', err.message);
-      (socket as any).emit('agent:status', { provider: 'codex', phase: 'error', detail: err.message, requestId, sessionId: session?.id || sid });
-      (socket as any).emit('codex:response', { result: `Codex error: ${err.message}`, sessionId: session?.id || sid, requestId });
+      (socket as any).emit('agent:status', { provider: 'codex', phase: 'error', detail: err.message, requestId, sessionId: resolvedSessionId });
+      (socket as any).emit('codex:response', { result: `Codex error: ${err.message}`, sessionId: resolvedSessionId, requestId });
     } finally {
       stopHeartbeat?.();
     }

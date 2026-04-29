@@ -17,19 +17,26 @@ function canUseWebGL() {
 
 function getDeviceProfile() {
   if (typeof window === 'undefined') {
-    return { particleBudget: 5200, dpr: [1, 1.5] as [number, number], reducedMotion: false };
+    return { particleBudget: 3800, dpr: [1, 1.35] as [number, number], reducedMotion: false, antialias: false };
   }
 
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
   const narrowScreen = Math.min(window.innerWidth, window.innerHeight) < 760;
-  const lowCoreCount = typeof navigator !== 'undefined' && navigator.hardwareConcurrency <= 4;
+  const coreCount = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
+  const lowCoreCount = coreCount <= 4;
+  const platform = typeof navigator !== 'undefined'
+    ? `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase()
+    : '';
+  const isWindows = platform.includes('win');
   const constrained = coarsePointer || narrowScreen || lowCoreCount;
+  const balanced = constrained || isWindows;
 
   return {
-    particleBudget: reducedMotion ? 1600 : constrained ? 3000 : 5200,
-    dpr: constrained ? [1, 1.25] as [number, number] : [1, 1.6] as [number, number],
+    particleBudget: reducedMotion ? 1400 : constrained ? 2400 : isWindows ? 3200 : 4200,
+    dpr: balanced ? [1, 1.2] as [number, number] : [1, 1.4] as [number, number],
     reducedMotion,
+    antialias: !balanced,
   };
 }
 
@@ -77,6 +84,7 @@ function AudioSphere({
 }) {
   const pointsRef = useRef<THREE.Points>(null);
   const timeRef = useRef(0);
+  const smoothedEnergyRef = useRef(0);
 
   const { geometry, material, positionsBase, phaseOffsets, shellWeights, latitudes } = useMemo(() => {
     const count = particleBudget;
@@ -134,7 +142,8 @@ function AudioSphere({
   }, [particleBudget]);
 
   useFrame((_, delta) => {
-    timeRef.current += delta;
+    const cappedDelta = Math.min(delta, 0.05);
+    timeRef.current += cappedDelta;
     if (!pointsRef.current) return;
 
     const bass = sampleBand(audioFrequencies, 0, 0.14);
@@ -142,7 +151,9 @@ function AudioSphere({
     const treble = sampleBand(audioFrequencies, 0.48, 1);
     const speechDrive = Math.max(0, speechVelocity);
     const idlePulse = listening ? 0.02 + Math.sin(timeRef.current * 1.8) * 0.025 : 0.015;
-    const globalEnergy = clamp01(audioLevel * 1.15 + bass * 0.45 + mids * 0.35);
+    const targetEnergy = clamp01(audioLevel * 1.15 + bass * 0.45 + mids * 0.35);
+    smoothedEnergyRef.current += (targetEnergy - smoothedEnergyRef.current) * 0.18;
+    const globalEnergy = smoothedEnergyRef.current;
 
     const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
     const colorAttr = geometry.getAttribute('color') as THREE.BufferAttribute;
@@ -206,9 +217,9 @@ function AudioSphere({
     colorAttr.needsUpdate = true;
 
     const rotationScale = reducedMotion ? 0.12 : 1;
-    pointsRef.current.rotation.x += delta * (0.04 + mids * 0.18 + speechDrive * 0.2) * rotationScale;
-    pointsRef.current.rotation.y += delta * (0.08 + bass * 0.35 + speechDrive * 0.15) * rotationScale;
-    pointsRef.current.rotation.z += delta * (0.03 + treble * 0.24) * rotationScale;
+    pointsRef.current.rotation.x += cappedDelta * (0.04 + mids * 0.18 + speechDrive * 0.2) * rotationScale;
+    pointsRef.current.rotation.y += cappedDelta * (0.08 + bass * 0.35 + speechDrive * 0.15) * rotationScale;
+    pointsRef.current.rotation.z += cappedDelta * (0.03 + treble * 0.24) * rotationScale;
 
     material.opacity = muted ? 0.34 : 0.72 + globalEnergy * 0.28;
     material.size = 0.034 + bass * 0.06 + treble * 0.035 + speechDrive * 0.02;
@@ -238,36 +249,40 @@ function ReactiveShell({
   const ringBRef = useRef<THREE.Mesh>(null);
   const ringCRef = useRef<THREE.Mesh>(null);
 
+  const timeRef = useRef(0);
+
   useFrame((_, delta) => {
+    const cappedDelta = Math.min(delta, 0.05);
+    timeRef.current += cappedDelta;
     const bass = sampleBand(audioFrequencies, 0, 0.14);
     const mids = sampleBand(audioFrequencies, 0.14, 0.48);
     const treble = sampleBand(audioFrequencies, 0.48, 1);
     const speechDrive = Math.max(0, speechVelocity);
-    const pulse = 1 + audioLevel * 0.18 + bass * 0.22 + speechDrive * 0.08 + (listening ? Math.sin(performance.now() * 0.002) * 0.015 : 0);
+    const pulse = 1 + audioLevel * 0.18 + bass * 0.22 + speechDrive * 0.08 + (listening ? Math.sin(timeRef.current * 2) * 0.015 : 0);
 
     const motionScale = reducedMotion ? 0.18 : 1;
 
     if (shellRef.current) {
       shellRef.current.scale.setScalar(pulse);
-      shellRef.current.rotation.x += delta * (0.1 + mids * 0.3) * motionScale;
-      shellRef.current.rotation.y += delta * (0.16 + bass * 0.45) * motionScale;
+      shellRef.current.rotation.x += cappedDelta * (0.1 + mids * 0.3) * motionScale;
+      shellRef.current.rotation.y += cappedDelta * (0.16 + bass * 0.45) * motionScale;
     }
 
     if (auraRef.current) {
       auraRef.current.scale.setScalar(1.02 + audioLevel * 0.35 + treble * 0.12);
-      auraRef.current.rotation.y -= delta * (0.08 + treble * 0.2) * motionScale;
+      auraRef.current.rotation.y -= cappedDelta * (0.08 + treble * 0.2) * motionScale;
     }
 
     if (ringARef.current) {
-      ringARef.current.rotation.z += delta * (0.32 + speechDrive * 0.4) * motionScale;
+      ringARef.current.rotation.z += cappedDelta * (0.32 + speechDrive * 0.4) * motionScale;
       ringARef.current.scale.setScalar(1 + bass * 0.16);
     }
     if (ringBRef.current) {
-      ringBRef.current.rotation.y -= delta * (0.24 + mids * 0.34) * motionScale;
+      ringBRef.current.rotation.y -= cappedDelta * (0.24 + mids * 0.34) * motionScale;
       ringBRef.current.scale.setScalar(1 + mids * 0.14);
     }
     if (ringCRef.current) {
-      ringCRef.current.rotation.x += delta * (0.28 + treble * 0.5) * motionScale;
+      ringCRef.current.rotation.x += cappedDelta * (0.28 + treble * 0.5) * motionScale;
       ringCRef.current.scale.setScalar(1 + treble * 0.18);
     }
   });
@@ -433,7 +448,9 @@ export default function RealisticSphere({
     <Canvas
       camera={{ position: [0, 0, 5.5], fov: 42 }}
       style={{ background: 'transparent', width: '100%', height: '100%' }}
-      gl={{ alpha: true, antialias: true, powerPreference: 'high-performance', failIfMajorPerformanceCaveat: false }}
+      frameloop="always"
+      performance={{ min: 0.55 }}
+      gl={{ alpha: true, antialias: deviceProfile.antialias, powerPreference: 'high-performance', failIfMajorPerformanceCaveat: false }}
       dpr={deviceProfile.dpr}
       onCreated={({ gl }) => {
         gl.domElement.addEventListener('webglcontextlost', (event) => {

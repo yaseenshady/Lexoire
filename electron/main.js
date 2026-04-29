@@ -390,7 +390,12 @@ function createWindow(initialUrl) {
   mainWindow = win;
 
   win.once('ready-to-show', () => win.show());
-  win.on('focus', () => { mainWindow = win; });
+  win.on('focus', () => {
+    mainWindow = win;
+    if (speechEnabled) {
+      speechOwnerWebContentsId = win.webContents.id;
+    }
+  });
 
   const url = initialUrl || ('http://127.0.0.1:' + LEXOIRE_PORT);
   console.log('Loading:', url);
@@ -404,6 +409,9 @@ function createWindow(initialUrl) {
   }
 
   win.on('closed', () => {
+    if (speechOwnerWebContentsId === win.webContents.id) {
+      speechOwnerWebContentsId = null;
+    }
     windows.delete(win);
     if (mainWindow === win) {
       mainWindow = windows.size > 0 ? [...windows][0] : null;
@@ -860,13 +868,26 @@ function shutdownChildProcesses() {
 }
 
 function getSpeechOwnerWindow() {
+  const focused = BrowserWindow.getFocusedWindow();
+  if (focused && !focused.isDestroyed()) {
+    if (speechEnabled) {
+      speechOwnerWebContentsId = focused.webContents.id;
+    }
+    return focused;
+  }
+
   if (speechOwnerWebContentsId !== null) {
     const owner = BrowserWindow.getAllWindows()
       .find((win) => !win.isDestroyed() && win.webContents.id === speechOwnerWebContentsId);
     if (owner) return owner;
+    speechOwnerWebContentsId = null;
   }
 
-  return BrowserWindow.getFocusedWindow() || mainWindow || (windows.size > 0 ? [...windows][0] : null);
+  const fallback = mainWindow || (windows.size > 0 ? [...windows][0] : null);
+  if (fallback && !fallback.isDestroyed() && speechEnabled) {
+    speechOwnerWebContentsId = fallback.webContents.id;
+  }
+  return fallback;
 }
 
 function sendSpeechEvent(data) {
@@ -877,7 +898,14 @@ function sendSpeechEvent(data) {
 }
 
 ipcMain.handle('speech:start', (event) => {
-  speechOwnerWebContentsId = event.sender.id;
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  if (
+    speechOwnerWebContentsId === null
+    || senderWindow?.isFocused()
+    || !BrowserWindow.getAllWindows().some((win) => !win.isDestroyed() && win.webContents.id === speechOwnerWebContentsId)
+  ) {
+    speechOwnerWebContentsId = event.sender.id;
+  }
   speechEnabled = true;
   startSpeechProcess();
 });

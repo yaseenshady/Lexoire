@@ -305,7 +305,7 @@ function formatStreamStatus(phase?: string, detail?: string) {
   const label = phase === 'start'
     ? 'Starting'
     : phase === 'chunk'
-      ? 'Streaming'
+      ? 'Working'
       : phase === 'heartbeat'
         ? 'Working'
       : phase === 'complete'
@@ -314,6 +314,7 @@ function formatStreamStatus(phase?: string, detail?: string) {
           ? 'Error'
           : 'Working';
 
+  if (phase === 'chunk') return label;
   return detail ? `${label} · ${detail}` : label;
 }
 
@@ -473,6 +474,9 @@ export default function App() {
   const analyzerRef = useRef<AnalyserNode | null>(null);
   const microphone = useRef<MediaStreamAudioSourceNode | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
+  const microphoneRestartReasonRef = useRef('');
+  const microphoneRestartTimerRef = useRef<number | null>(null);
+  const audioContextInitPromiseRef = useRef<Promise<void> | null>(null);
   const animationId = useRef<number | null>(null);
   const lastFrequenciesRef = useRef<Uint8Array | null>(null);
   const audioLevelHistoryRef = useRef<number[]>([]);
@@ -607,6 +611,10 @@ export default function App() {
     if (listeningRestartTimer.current !== null) {
       window.clearTimeout(listeningRestartTimer.current);
     }
+    if (microphoneRestartTimerRef.current !== null) {
+      window.clearTimeout(microphoneRestartTimerRef.current);
+      microphoneRestartTimerRef.current = null;
+    }
     if (conversationSaveTimerRef.current !== null) {
       window.clearTimeout(conversationSaveTimerRef.current);
     }
@@ -710,6 +718,7 @@ export default function App() {
 
   // ── Initialize Audio Context on First Speech Event ───────────────────────
   const releaseMicrophoneCapture = () => {
+    audioContextInitPromiseRef.current = null;
     if (microphone.current) {
       try { microphone.current.disconnect(); } catch {}
       microphone.current = null;
@@ -730,9 +739,24 @@ export default function App() {
 
   const initAudioContext = async () => {
     if (audioContextRef.current && analyzerRef.current && microphone.current && microphoneStreamRef.current?.active) return;
+    if (audioContextInitPromiseRef.current) {
+      await audioContextInitPromiseRef.current;
+      return;
+    }
+    const initPromise = (async () => {
     try {
       const stream = microphoneStreamRef.current ?? await navigator.mediaDevices.getUserMedia(AUDIO_INPUT_CONSTRAINTS);
       microphoneStreamRef.current = stream;
+      stream.getTracks().forEach((track) => {
+        track.onended = () => {
+          microphoneRestartReasonRef.current = 'input stream ended';
+          forceListeningResume(180);
+        };
+        track.onmute = () => {
+          microphoneRestartReasonRef.current = 'input stream muted';
+          forceListeningResume(260);
+        };
+      });
       const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioContextCtor) return;
       const ctx = audioContextRef.current ?? new AudioContextCtor();
@@ -768,6 +792,11 @@ export default function App() {
         }
       }
     }
+    })().finally(() => {
+      audioContextInitPromiseRef.current = null;
+    });
+    audioContextInitPromiseRef.current = initPromise;
+    await initPromise;
   };
 
   const blobToBase64 = (blob: Blob) => new Promise<string>((resolve, reject) => {
@@ -1367,6 +1396,17 @@ export default function App() {
   const resetSpokenTextMemory = () => {
     currentSpokenTextRef.current = '';
     recentSpokenTextRef.current = [];
+  };
+
+  const commitInterimToDraft = () => {
+    const liveText = interimRef.current.trim();
+    if (!liveText || isLikelySpeechEcho(liveText)) return false;
+    const nextDraft = draftRef.current ? `${draftRef.current} ${liveText}` : liveText;
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+    setInterim('');
+    interimRef.current = '';
+    return true;
   };
 
   const resetInterruptionCandidate = () => {
@@ -2157,6 +2197,67 @@ export default function App() {
     }, actualDelay);
   };
 
+  const forceListeningResume = (delay = 120) => {
+    clearListeningRestartTimer();
+    if (microphoneRestartTimerRef.current !== null) {
+      window.clearTimeout(microphoneRestartTimerRef.current);
+      microphoneRestartTimerRef.current = null;
+    }
+    const guardRemaining = Math.max(0, postSpeechEchoGuardRef.current - Date.now());
+    const actualDelay = guardRemaining > 0 ? Math.max(delay, guardRemaining + 150) : delay;
+    microphoneRestartTimerRef.current = window.setTimeout(async () => {
+      microphoneRestartTimerRef.current = null;
+      if (mutedRef.current || micPermissionRef.current === 'denied' || speechActiveRef.current) {
+        return;
+      }
+
+      clearSwiftTimeout();
+      suppressRecognitionResumeRef.current = false;
+      stopServerSpeechRecognition(true);
+      if (browserRecognitionRef.current) {
+        const recognition = browserRecognitionRef.current;
+        browserRecognitionRef.current = null;
+        try { recognition.abort?.(); } catch {
+          try { recognition.stop?.(); } catch {}
+        }
+      }
+      try {
+        await Promise.resolve(window.lexoire?.stopSpeechRecognition?.());
+      } catch {}
+      listeningRef.current = false;
+      setListening(false);
+      releaseMicrophoneCapture();
+      const reason = microphoneRestartReasonRef.current;
+      microphoneRestartReasonRef.current = '';
+      if (reason) {
+        console.info('[SPEECH] Restarting microphone after', reason);
+      }
+      startListening();
+    }, actualDelay);
+  };
+
+  useEffect(() => {
+    if (!navigator.mediaDevices?.addEventListener) return;
+
+    const handleDeviceChange = () => {
+      microphoneRestartReasonRef.current = 'audio device change';
+      if (
+        mutedRef.current
+        || micPermissionRef.current === 'denied'
+        || speechActiveRef.current
+        || (!listeningRef.current && !serverSpeechModeRef.current && !browserRecognitionRef.current)
+      ) {
+        return;
+      }
+      forceListeningResume(350);
+    };
+
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+    };
+  }, []);
+
   const getSoundContext = async () => {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) return null;
@@ -2504,7 +2605,7 @@ export default function App() {
     resetSpokenTextMemory();
     setInterim('');
     interimRef.current = '';
-    scheduleListeningResume(80);
+    forceListeningResume(80);
   };
 
   const interruptAssistantOutput = () => {
@@ -2516,7 +2617,7 @@ export default function App() {
     resetSpokenTextMemory();
     setInterim('');
     interimRef.current = '';
-    scheduleListeningResume(80);
+    forceListeningResume(80);
   };
 
   const handleLocalControlCommand = (cmd: string) => {
@@ -2531,7 +2632,7 @@ export default function App() {
         return false;
       }
       clearQueuedPrompts();
-      scheduleListeningResume(80);
+      forceListeningResume(80);
       return true;
     }
 
@@ -2650,6 +2751,12 @@ export default function App() {
       return;
     }
 
+    if (busyRef.current) {
+      enqueueQueuedPrompt(cmd, agentRef.current, activeWorkspaceSessionId || undefined);
+      scheduleListeningResume(160);
+      return;
+    }
+
     dispatchPrompt(cmd);
   };
 
@@ -2703,16 +2810,16 @@ export default function App() {
       currentSpokenTextRef.current = '';
       speechActiveRef.current = false;
       setIsSpeaking(false);
-      scheduleListeningResume();
+      forceListeningResume();
       return;
     }
 
+    const cachedUserSpeech = commitInterimToDraft();
+    clearSilenceTimer();
     speechActiveRef.current = true;
     setIsSpeaking(true);
     const playbackGeneration = speechPlaybackGenerationRef.current;
     rememberSpokenText(next);
-    setInterim('');
-    interimRef.current = '';
     stopListening();
 
     const finish = () => {
@@ -2725,7 +2832,7 @@ export default function App() {
       if (!speechActiveRef.current && speechQueueRef.current.length === 0) {
         window.setTimeout(() => { currentSpokenTextRef.current = ''; }, 1500);
         setIsSpeaking(false);
-        scheduleListeningResume(400);
+        forceListeningResume(400);
         return;
       }
       speechActiveRef.current = false;
@@ -2735,7 +2842,7 @@ export default function App() {
         return;
       }
       window.setTimeout(() => { currentSpokenTextRef.current = ''; }, 1500);
-      scheduleListeningResume(400);
+      forceListeningResume(cachedUserSpeech || draftRef.current.trim() ? 220 : 400);
     };
 
     const speakWithBrowserSpeech = (requireExplicitSelection = false) => {
@@ -2850,12 +2957,14 @@ export default function App() {
 
   return (
     <div style={{
-      width: '100vw', height: '100vh', minHeight: '100dvh',
+      width: '100vw', height: '100dvh', maxHeight: '100dvh',
       background: 'radial-gradient(ellipse at 50% 0%, #071a0e 0%, #040a06 55%, #020504 100%)',
       color: '#c8ffd4', fontFamily: '"SF Mono", "Fira Code", "Courier New", monospace',
       display: 'flex', flexDirection: 'column', overflow: 'hidden',
       userSelect: 'none',
       position: 'relative',
+      isolation: 'isolate',
+      boxSizing: 'border-box',
     }}>
       <ParticleBackground />
 
@@ -2869,6 +2978,7 @@ export default function App() {
           boxShadow: '0 2px 18px #ff000035',
           zIndex: 20,
           animation: 'fadeIn 0.3s ease',
+          flexShrink: 0,
         }}>
           <span style={{ fontSize: 14, color: '#ff4444', flexShrink: 0 }}>⚠</span>
           <span style={{ fontSize: 10, color: '#ff8888', letterSpacing: 0.5, lineHeight: 1.5, flex: 1 }}>
@@ -2889,11 +2999,16 @@ export default function App() {
         padding: '12px 80px 12px 20px',
         borderBottom: '1px solid #10ff5015',
         background: 'linear-gradient(135deg, rgba(1, 30, 12, 0.8), rgba(5, 20, 8, 0.6))',
-        display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+        display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'nowrap',
         backdropFilter: 'blur(20px)',
         position: 'sticky',
         top: 0,
         zIndex: 10,
+        flexShrink: 0,
+        minHeight: 60,
+        maxHeight: 86,
+        overflowX: 'auto',
+        overflowY: 'visible',
       } as any}>
         <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: 8, color: '#10ff50', textTransform: 'uppercase' }}>LEXOIRE</span>
         <span style={{ fontSize: 10, letterSpacing: 4, color: '#10ff5060', textTransform: 'uppercase' }}>AI ORCHESTRATOR</span>
@@ -2922,7 +3037,7 @@ export default function App() {
           })}
         </div>
 
-        <div className="lexoire-no-drag" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, position: 'relative', flexWrap: 'wrap', justifyContent: 'flex-end', flex: '1 1 360px' }}>
+        <div className="lexoire-no-drag" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, position: 'relative', flexWrap: 'nowrap', justifyContent: 'flex-end', flex: '1 0 auto' }}>
           <button onClick={() => setSessionDropdownOpen(v => !v)} style={{
             background: 'linear-gradient(135deg, rgba(16, 255, 80, 0.12), rgba(0, 204, 120, 0.05))',
             border: '1px solid #10ff5030',
@@ -2960,8 +3075,9 @@ export default function App() {
           {(isSpeaking || speechQueueCount > 0) && (
             <button
               onClick={() => {
-                interruptAssistantOutput();
+                stopCurrentSpeech();
               }}
+              title="Stop speaking and resume listening"
               style={{
                 background: 'linear-gradient(135deg, rgba(255, 150, 80, 0.14), rgba(255, 80, 40, 0.08))',
                 border: '1.5px solid #ff965055',
@@ -3398,10 +3514,10 @@ export default function App() {
       </div>
 
       {/* ── Body: sphere on top, chat below ── */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', zIndex: 1 }}>
+      <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', zIndex: 1 }}>
         {/* ── Sphere (top center, fixed height) ── */}
         <div style={{
-          flexShrink: 0, height: 380,
+          flexShrink: 0, height: 'clamp(180px, 34vh, 320px)',
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
           background: 'radial-gradient(circle at 50% 35%, rgba(28, 255, 163, 0.14), rgba(4, 12, 6, 0.96) 42%, #030806 100%)',
           borderBottom: '1px solid #10ff5012',

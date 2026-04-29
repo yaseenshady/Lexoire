@@ -372,6 +372,11 @@ class DatabaseService {
     }
   }
 
+  private getMessageStorageId(conversationId: string, messageId: string, occurrence: number): string {
+    const baseId = `${conversationId}:${messageId}`;
+    return occurrence === 0 ? baseId : `${baseId}:${occurrence + 1}`;
+  }
+
   saveConversation(conversation: Conversation): void {
     const saveConversationTransaction = this.db.transaction((value: Conversation) => {
       this.db.prepare(`
@@ -397,9 +402,12 @@ class DatabaseService {
         VALUES (?, ?, ?, ?, ?, ?)
       `);
 
+      const messageIdCounts = new Map<string, number>();
       for (const message of value.messages) {
+        const occurrence = messageIdCounts.get(message.id) ?? 0;
+        messageIdCounts.set(message.id, occurrence + 1);
         insertMessage.run(
-          message.id,
+          this.getMessageStorageId(value.id, message.id, occurrence),
           value.id,
           message.role,
           message.content,
