@@ -27,6 +27,7 @@
 html {
   background: var(--black);
   scroll-behavior: smooth;
+  overflow-x: hidden; /* lock horizontal scroll on iOS Safari */
 }
 
 body {
@@ -2098,6 +2099,28 @@ html.glass-effects-fallback .install-button {
 
   .article-next {
     display: grid;
+  }
+
+  /* Prevent any element from causing horizontal scroll on mobile */
+  .terminal-hero,
+  .terminal-section,
+  .terminal-page,
+  .terminal-footer {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  /* typing-command: disable nowrap on all mobile sizes */
+  .typing-command span {
+    white-space: normal;
+    overflow: visible;
+    border-right: none;
+    clip-path: none;
+  }
+
+  .typing-command.is-visible span {
+    animation: none;
+    clip-path: none;
   }
 
   /* Mobile: hero title gets a continuous glitch pulse */

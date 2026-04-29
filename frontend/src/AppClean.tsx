@@ -1312,8 +1312,8 @@ export default function App() {
         setInterim('');
         interimRef.current = '';
         console.log('[SPEECH] Updated draft to:', n.slice(0, 50));
-        // Stop listening and start auto-send countdown
-        stopListening();
+        // Keep listening so multi-sentence dictation accumulates correctly.
+        // Silence timer handles auto-send after 2s of no new speech.
         startSilenceTimer();
       } else if (ev.type === 'error') {
         clearSwiftTimeout();
