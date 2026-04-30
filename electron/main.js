@@ -12,9 +12,10 @@ app.commandLine.appendSwitch('disable-http-cache');
 const DEFAULT_LEXOIRE_PORT = Number.parseInt(process.env.LEXOIRE_PORT || '7337', 10);
 let LEXOIRE_PORT = Number.isFinite(DEFAULT_LEXOIRE_PORT) ? DEFAULT_LEXOIRE_PORT : 7337;
 const APP_PROFILE_CANDIDATES = ['lexoire-voice-automation', 'LEXOIRE'];
+const isLexoirePackaged = app.isPackaged || existsSync(path.join(process.resourcesPath, 'app.asar'));
 
 function configureProfilePaths() {
-  if (!app.isPackaged) return;
+  if (!isLexoirePackaged) return;
 
   const appDataPath = app.getPath('appData');
   const userDataPath = APP_PROFILE_CANDIDATES
@@ -32,9 +33,12 @@ const windows = new Set(); // Track all open BrowserWindow instances
 let mainWindow;            // Points to the most-recently-focused window
 let backendProcess;
 
-const resourcesPath = app.isPackaged
+const appResourcesPath = isLexoirePackaged
   ? path.join(process.resourcesPath, 'app.asar')
   : path.join(__dirname, '..');
+const backendResourcesPath = isLexoirePackaged
+  ? path.join(process.resourcesPath, 'app.asar.unpacked')
+  : appResourcesPath;
 
 function waitForBackend(port, maxWaitMs = 30000) {
   return new Promise((resolve, reject) => {
@@ -258,7 +262,7 @@ function cleanupStaleSpeechProcesses(exceptPid) {
 }
 
 function getBackendRuntime() {
-  const defaultDbPath = app.isPackaged
+  const defaultDbPath = isLexoirePackaged
     ? path.join(app.getPath('userData'), LEXOIRE_PORT === 7337 ? 'lexoire.db' : `lexoire-${LEXOIRE_PORT}.db`)
     : (process.env.DB_PATH || '');
   const env = {
@@ -269,12 +273,12 @@ function getBackendRuntime() {
     DB_PATH: defaultDbPath,
   };
 
-  if (app.isPackaged) {
-    env.LEXOIRE_LOCAL_STT_CACHE_DIR = path.join(process.resourcesPath, 'models', 'transformers');
+  if (isLexoirePackaged) {
+    env.LEXOIRE_LOCAL_STT_CACHE_DIR = path.join(backendResourcesPath, 'backend', 'models', 'transformers');
     env.LEXOIRE_LOCAL_STT_OFFLINE_ONLY = '1';
   }
 
-  if (app.isPackaged) {
+  if (isLexoirePackaged) {
     return {
       command: process.execPath,
       args: [],
@@ -290,8 +294,8 @@ function getBackendRuntime() {
 }
 
 async function startBackend() {
-  const backendPath = path.join(resourcesPath, 'backend', 'dist', 'server.js');
-  const backendCwd = app.isPackaged ? app.getPath('userData') : path.join(resourcesPath, 'backend');
+  const backendPath = path.join(backendResourcesPath, 'backend', 'dist', 'server.js');
+  const backendCwd = isLexoirePackaged ? app.getPath('userData') : path.join(backendResourcesPath, 'backend');
   LEXOIRE_PORT = await findAvailablePort(LEXOIRE_PORT);
   const runtime = getBackendRuntime();
   console.log('Starting backend:', backendPath, 'on port', LEXOIRE_PORT);
@@ -781,7 +785,7 @@ let speechEnabled = false;
 let speechOwnerWebContentsId = null;
 
 function getSpeechBinaryPath() {
-  if (app.isPackaged) {
+  if (isLexoirePackaged) {
     return path.join(process.resourcesPath, 'app.asar.unpacked', 'swift', 'LexoireSpeech');
   }
 
