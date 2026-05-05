@@ -3,7 +3,7 @@
   "version": "1.1.0",
   "description": "Unified Lexoire workspace for voice-driven Copilot automation",
   "scripts": {
-    "install:all": "npm --prefix frontend install && npm --prefix backend install",
+    "install:all": "npm install && npm --prefix frontend install && npm --prefix backend install",
     "speech:model:prepare": "npm --prefix backend run speech:model:prepare",
     "build:swift": "node -e \"const {spawnSync}=require('child_process'); const os=require('os'); if(os.platform()!=='darwin'){console.log('Skipping Swift speech build on non-Darwin'); process.exit(0)} const result=spawnSync('swiftc',['swift/LexoireSpeech.swift','-o','swift/LexoireSpeech'],{stdio:'inherit'}); process.exit(result.status ?? 1)\"",
     "dev": "concurrently -k \"npm run dev:backend\" \"npm run dev:frontend\"",
