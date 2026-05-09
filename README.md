@@ -55,7 +55,7 @@ cp backend/.env.example backend/.env
 npm run dev
 ```
 
-> Frontend → `http://localhost:3000` · Backend → `http://localhost:7337`
+> Frontend → `http://localhost:3000` · Backend → `http://localhost:5000`
 
 ---
 
