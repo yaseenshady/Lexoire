@@ -1,20 +1,101 @@
 #!/usr/bin/env bash
-# Lexoire installer — downloads the latest release for your platform
-# Usage: curl -fsSL https://raw.githubusercontent.com/yaseensh/Lexoire/main/install.sh | bash
+# Lexoire installer — installs CLI dependencies then downloads the latest release
+# Usage: curl -fsSL https://raw.githubusercontent.com/yaseenshady/Lexoire/main/install.sh | bash
 
 set -euo pipefail
 
-REPO="yaseensh/Lexoire"
+REPO="yaseenshady/Lexoire"
 API="https://api.github.com/repos/${REPO}/releases/latest"
 BASE="https://github.com/${REPO}/releases/latest"
 
 echo ""
 echo "  LEXOIRE — voice command infrastructure"
-echo "  Fetching latest release..."
 echo ""
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
+
+# ---------------------------------------------------------------------------
+# Helper: install GitHub CLI + gh-copilot extension + Claude CLI
+# ---------------------------------------------------------------------------
+install_cli_deps() {
+  echo "  ── CLI dependencies ──────────────────────────────────────────"
+
+  # ── GitHub CLI ──────────────────────────────────────────────────────────
+  if command -v gh &>/dev/null; then
+    echo "  ✅ GitHub CLI already installed ($(gh --version | head -1))"
+  else
+    echo "  📦 Installing GitHub CLI..."
+    case "$OS" in
+      Darwin)
+        if command -v brew &>/dev/null; then
+          brew install gh
+        else
+          echo "  ⚠️  Homebrew not found. Install gh manually: https://cli.github.com"
+        fi
+        ;;
+      Linux)
+        if command -v apt-get &>/dev/null; then
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+            | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+          sudo apt-get update -qq && sudo apt-get install -y gh
+        elif command -v dnf &>/dev/null; then
+          sudo dnf install -y gh
+        elif command -v pacman &>/dev/null; then
+          sudo pacman -S --noconfirm github-cli
+        else
+          echo "  ⚠️  Could not detect package manager. Install gh manually: https://cli.github.com"
+        fi
+        ;;
+      MINGW*|MSYS*|CYGWIN*|Windows_NT)
+        if command -v winget &>/dev/null; then
+          winget install --silent GitHub.cli
+        elif command -v scoop &>/dev/null; then
+          scoop install gh
+        elif command -v choco &>/dev/null; then
+          choco install gh -y
+        else
+          echo "  ⚠️  No package manager found. Install gh manually: https://cli.github.com"
+        fi
+        ;;
+    esac
+  fi
+
+  # ── GitHub Copilot extension ─────────────────────────────────────────────
+  if command -v gh &>/dev/null; then
+    if gh copilot --version &>/dev/null 2>&1; then
+      echo "  ✅ GitHub Copilot CLI extension already installed"
+    else
+      echo "  📦 Installing GitHub Copilot CLI extension..."
+      gh extension install github/gh-copilot || \
+        echo "  ⚠️  Could not install gh-copilot. Run: gh extension install github/gh-copilot"
+    fi
+  fi
+
+  # ── Claude CLI ───────────────────────────────────────────────────────────
+  if command -v claude &>/dev/null; then
+    echo "  ✅ Claude CLI already installed ($(claude --version 2>/dev/null | head -1))"
+  else
+    echo "  📦 Installing Claude CLI..."
+    if command -v npm &>/dev/null; then
+      npm install -g @anthropic-ai/claude-code || \
+        echo "  ⚠️  npm install failed. Try: sudo npm install -g @anthropic-ai/claude-code"
+    else
+      echo "  ⚠️  npm not found. Install Node.js 22+ first, then run:"
+      echo "       npm install -g @anthropic-ai/claude-code"
+    fi
+  fi
+
+  echo "  ──────────────────────────────────────────────────────────────"
+  echo ""
+}
+
+install_cli_deps
+
+echo "  Fetching latest Lexoire release..."
+echo ""
 
 pick_asset() {
   local assets="$1"
